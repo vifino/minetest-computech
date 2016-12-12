@@ -1,0 +1,1 @@
+computech-base is a common dependency of all computech mods. It has no functionality on it's own, it is just a set of helpers.
