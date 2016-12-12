@@ -4,7 +4,10 @@ local luaforth = dofile(minetest.get_modpath("computech_machine_forth") .. "/lua
 local tremove = table.remove
 
 -- Variables
-local fm_timer = 0.1 -- 10Hz
+local fm_timer_hz = 10 -- 10Hz
+
+-- dont change after this line unless you know what you are doing.
+local fm_timer = 1.0/fm_timer_hz
 
 -- IE
 local ie, req_ie = _G, minetest.request_insecure_environment
