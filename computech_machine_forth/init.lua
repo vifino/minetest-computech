@@ -4,10 +4,11 @@ local luaforth = dofile(minetest.get_modpath("computech_machine_forth") .. "/lua
 local tremove = table.remove
 
 -- Variables
-local fm_timer_hz = 10 -- 10Hz
+local fm_timer_hz = 10 -- 10Hz, remember to set nodetimer_interval = 0.1, otherwise it won't go over 1Hz.
 
 -- dont change after this line unless you know what you are doing.
 local fm_timer = 1.0/fm_timer_hz
+minetest.setting_set("nodetimer_interval", fm_timer)
 
 -- IE
 local ie, req_ie = _G, minetest.request_insecure_environment
@@ -104,7 +105,7 @@ local function reset(pos, code)
 	print("[computech_machine_forth] D: machine reset")
 	local meta = minetest.get_meta(pos)
 	meta:set_string("stack", computech.msgpack.iepack(ie, {}))
-	code = code or "s' Hello World' s' output' digiline_send"
+	code = code or "s' Hello World' s' output' digiline-send"
 	meta:set_string("code", code)
 	local env = construct_env(pos)
 	env = rebuild_env(env, pos)
@@ -142,7 +143,6 @@ end
 
 -- tick and events
 local function on_timer(pos)
-	print("[computech_machine_forth] D: Timer")
 	local meta = minetest.get_meta(pos)
 	-- get stuff
 	local stack = computech.msgpack.ieunpack(ie, meta:get_string("stack"))
@@ -157,27 +157,23 @@ local function on_timer(pos)
 		local inst = insts[ipos]
 		if inst then
 			local timer = minetest.get_node_timer(pos)
-			print("[computech_machine_forth] D: Running inst")
 			success, new_stack, new_env = pcall(luaforth.eval_inst, inst, env, stack)
 			if not success then
-				print("[computech_machine_forth] D: Fail")
 				-- do something with the error.
 				timer:stop()
 				meta:set_string("lasterror", new_stack)
 				print("[computech_machine_forth] I: Machine at "..computech.strutils.stringify_pos(pos).." errored: "..tostring(new_stack))
 				return
 			end
-			print("[computech_machine_forth] D: Done running inst.")
 			-- set stuff
 			meta:set_string("stack", computech.msgpack.iepack(ie, new_stack))
 			meta:set_int("ipos", ipos + 1)
 			meta:set_string("env", computech.msgpack.iepack(ie, new_env))
-			print("[computech_machine_forth] D: Set new stack and env. What is happening?!")
 			if meta:get_int("waitfordigi") == 0 then
 				timer:start(fm_timer) -- 1Hz for now.
 			end
 		else -- loop back
-			print("[computech_machine_forth] D: Resetting?]")
+			print("[computech_machine_forth] D: Resetting?")
 			restart(pos)
 			return
 		end
