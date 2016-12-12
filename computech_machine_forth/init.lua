@@ -4,11 +4,9 @@ local luaforth = dofile(minetest.get_modpath("computech_machine_forth") .. "/lua
 local tremove = table.remove
 
 -- Variables
-local fm_timer_hz = 10 -- 10Hz, remember to set nodetimer_interval = 0.1, otherwise it won't go over 1Hz.
+local fm_timer_rate = 0.02 -- Not sure what units this is in. 0.1 is NOT 10hz, that's for sure.
 
--- dont change after this line unless you know what you are doing.
-local fm_timer = 1.0/fm_timer_hz
-minetest.setting_set("nodetimer_interval", fm_timer)
+local bettertimers = computech.bettertimers
 
 -- IE
 local ie, req_ie = _G, minetest.request_insecure_environment
@@ -124,7 +122,7 @@ local function reset(pos, code)
 	if timer:is_started() then
 		timer:stop()
 	end
-	timer:start(fm_timer) -- 10Hz, maybe.
+	timer:start(1.0) -- used to ensure position in registry.
 end
 
 local function on_receive_fields(pos, _, fields, sender)
@@ -138,11 +136,11 @@ local function restart(pos)
 	print("[computech_machine_forth] D: Restart")
 	meta:set_int("ipos", 1)
 	meta:set_string(computech.msgpack.iepack(ie, {}))
-	timer:start(fm_timer)
+	timer:start(1.0) -- used to ensure position in registry.
 end
 
 -- tick and events
-local function on_timer(pos)
+local function on_fm_event(pos)
 	local meta = minetest.get_meta(pos)
 	-- get stuff
 	local stack = computech.msgpack.ieunpack(ie, meta:get_string("stack"))
@@ -161,6 +159,7 @@ local function on_timer(pos)
 			if not success then
 				-- do something with the error.
 				timer:stop()
+				bettertimers.deregister(pos)
 				meta:set_string("lasterror", new_stack)
 				print("[computech_machine_forth] I: Machine at "..computech.strutils.stringify_pos(pos).." errored: "..tostring(new_stack))
 				return
@@ -169,8 +168,9 @@ local function on_timer(pos)
 			meta:set_string("stack", computech.msgpack.iepack(ie, new_stack))
 			meta:set_int("ipos", ipos + 1)
 			meta:set_string("env", computech.msgpack.iepack(ie, new_env))
-			if meta:get_int("waitfordigi") == 0 then
-				timer:start(fm_timer) -- 1Hz for now.
+			if meta:get_int("waitfordigi") ~= 0 then
+				timer:stop()
+				bettertimers.deregister(pos)
 			end
 		else -- loop back
 			print("[computech_machine_forth] D: Resetting?")
@@ -193,7 +193,7 @@ local function on_digiline(pos, node, channel, msg)
 		meta:set_string("stack", computech.msgpack.iepack(ie, stack))
 		meta:set_int("waitingfordigi", 0)
 		local timer = minetest.get_node_timer(pos)
-		timer:start(fm_timer)
+		timer:start(1.0) -- used to ensure position in registry.
 	end
 end
 
@@ -201,7 +201,7 @@ minetest.register_node("computech_machine_forth:basic_forth_machine", {
 	description = "CompuTech Forth Machine",
 	on_construct = reset,
 	on_receive_fields = on_receive_fields,
-	on_timer = on_timer,
+	on_timer = bettertimers.create_on_timer("computech_machine_forth:basic_forth_machine", on_fm_event, fm_timer_rate),
 	digiline = {
 		receptor = {},
 		effector = {
