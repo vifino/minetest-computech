@@ -71,10 +71,10 @@ local function register_ram(kb)
 			read32 = function (pos, msg, dir)
 				local addr = msg.params[1]
 				if addr < bytes then
-					local a = read_ram(pos, addr)
-					local b = read_ram(pos, addr + 1)
-					local c = read_ram(pos, addr + 2)
-					local d = read_ram(pos, addr + 3)
+					local a = read_ram(pos, addr) or 0xFF
+					local b = read_ram(pos, addr + 1) or 0xFF
+					local c = read_ram(pos, addr + 2) or 0xFF
+					local d = read_ram(pos, addr + 3) or 0xFF
 					msg.respond((a * 0x1000000) + (b * 0x10000) + (c * 0x100) + d)
 				end
 			end,
@@ -104,21 +104,35 @@ local function register_ram(kb)
 end
 register_ram(64)
 
-local function update_inspector(pos)
+local inspector_roms = nil
+local function update_inspector(pos, message)
 	local meta = minetest.get_meta(pos)
 
 	local v = tonumber(meta:get_string("value")) or 0
 	meta:set_string("value", tostring(v))
-
+	if not inspector_roms then
+		local items = "Select item to flash"
+		for k, v in pairs(addressbus.roms) do
+			items = items .. "," .. minetest.formspec_escape(k)
+		end
+		inspector_roms = items
+	end
+	local confirmation = ""
+	if message then
+		confirmation = "label[6,1;" .. minetest.formspec_escape(message) .. "]"
+	end
 	meta:set_string("formspec", "size[10,8]" ..
 		"button[1,1;1,1;am;<]"..
 		"label[2,1;" .. string.format("0x%08x", bit32.band(0xFFFFFFFF, meta:get_int("address"))) .. "]"..
 		"button[4,1;1,1;ap;>]"..
-		"button[6,1;1,1;ar;R]"..
-		"button[7,1;1,1;aw;W]"..
+		"button[5,1;1,1;ar;R]"..
+		"button[5,2;1,1;aw;W]"..
 		"label[2,2;" .. string.format("0x%08x", v) .. "]"..
-		"button[1,3;1,1;vm;-]"..
-		"button[2,3;1,1;vp;+]"..
+		"button[1,2;1,1;vm;-]"..
+		"button[4,2;1,1;vp;+]"..
+		"button[6,2;1,1;ex;Ex]"..
+		"dropdown[1,3;4,1;flash;" .. inspector_roms .. ";ROM Flash]"..
+		confirmation..
 		"button_exit[9,1;1,0;exit;X]")
 end
 minetest.register_node("computech_addressbus:inspector", {
@@ -134,6 +148,7 @@ minetest.register_node("computech_addressbus:inspector", {
 		update_inspector(pos)
 	end,
 	on_receive_fields = function (pos, _, fields, sender)
+		local message = nil
 		local meta = minetest.get_meta(pos)
 		if fields["am"] then
 			meta:set_int("address", bit32.band(0xFFFFFFFF, meta:get_int("address") - 1))
@@ -141,6 +156,8 @@ minetest.register_node("computech_addressbus:inspector", {
 		if fields["ap"] then
 			meta:set_int("address", bit32.band(0xFFFFFFFF, meta:get_int("address") + 1))
 		end
+		-- I put this as a string to avoid signed clipping, forgot about it for address,
+		-- and everything worked out anyway. Well, it's set now.
 		local v = bit32.band(0xFFFFFFFF, tonumber(meta:get_string("value")) or 0)
 		if fields["vm"] then
 			v = bit32.band(0xFFFFFFFF, v - 1)
@@ -159,7 +176,37 @@ minetest.register_node("computech_addressbus:inspector", {
 		if fields["aw"] then
 			addressbus.send_all(pos, addressbus.wrap_message("write32", {a, v}, function() end))
 		end
-		update_inspector(pos)
+		if fields["flash"] then
+			local flashitem = fields["flash"]
+			local rom = addressbus.roms[flashitem]
+			if rom then
+				local romulen = math.ceil(rom:len() / 4)
+				for i = 0, romulen - 1 do
+					local a, b, c, d = rom:byte(1), rom:byte(2), rom:byte(3), rom:byte(4)
+					a = a or 0
+					b = b or 0
+					c = c or 0
+					d = d or 0
+					local addr = i * 4
+					local v = d + (c * 0x100) + (b * 0x10000) + (a * 0x1000000)
+					addressbus.send_all(pos, addressbus.wrap_message("write32", {addr, v}, function() end))
+					rom = rom:sub(5)
+				end
+				message = "flash OK"
+			else
+				message = "invalid ROM"
+			end
+		end
+		if fields["ex"] then
+			local ext = 0
+			addressbus.send_all(pos, addressbus.wrap_message("extent", {}, function(a)
+				if a > ext then
+					ext = a
+				end
+			end))
+			message = "len: " .. ext
+		end
+		update_inspector(pos, message)
 		addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
 	end,
 	computech_addressbus = {}
@@ -220,7 +267,8 @@ local function find_direction(pos, dir)
 	return bit32.band(dir - n.param2, 3), mapping[((dir + n.param2) % 4) + 1]
 end
 
-local function mcu_get_extent(pos, sideport, places)
+local function mcu_get_extent(pos, sideport)
+	-- This gets called on most memory accesses.
 	local _, result = nil, nil
 	if sideport then
 		_, result = find_direction(pos, 2)
@@ -240,12 +288,13 @@ end
 
 local function mcu_forwarder(pos, msg, dir)
 	if find_direction(pos, dir) == 3 then
-		local a = mcu_get_extent(pos, true, msg.places)
-		-- Re-package the message.
+		local a = mcu_get_extent(pos, true)
+		-- Re-package the message, and re-send.
+		-- The depth limit should catch nasty cases.
 		local newmsg = addressbus.wrap_message(msg.id, {msg.params[1], msg.params[2]}, msg.respond)
 		local portdir = 2
 		if msg.params[1] >= a then
-			newmsg.params[1] = bit32.band(newmsg.params[1] - a, 0xFFFFFFFF)
+			newmsg.params[1] = bit32.band(msg.params[1] - a, 0xFFFFFFFF)
 			portdir = 1
 		end
 		local _, port = find_direction(pos, portdir)
@@ -263,18 +312,20 @@ minetest.register_node("computech_addressbus:mcu", {
 	paramtype2 = "facedir",
 	groups = {dig_immediate = 2},
 	computech_addressbus = {
+		-- These are basically the same
 		read32 = mcu_forwarder,
 		write32 = mcu_forwarder,
 		extent = function (pos, msg, dir)
 			if find_direction(pos, dir) == 3 then
 				-- CPU wants to know extent.
-				local a = mcu_get_extent(pos, true, msg.places)
-				local b = mcu_get_extent(pos, false, msg.places)
-				return a + b
+				local a = mcu_get_extent(pos, true)
+				local b = mcu_get_extent(pos, false)
+				msg.respond(a + b)
 			end
 		end,
 		flush = function (pos, msg, dir)
 			if find_direction(pos, dir) == 3 then
+				-- Flush should be propagated from CPUs outwards to all.
 				local _, flushA = find_direction(pos, 1)
 				local _, flushB = find_direction(pos, 2)
 				addressbus.send_all(pos, msg, flushA)

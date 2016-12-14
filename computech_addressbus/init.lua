@@ -6,6 +6,8 @@ local mp = minetest.get_modpath("computech_addressbus")
 
 local addressbus = {}
 computech.addressbus = addressbus
+-- ID'd ROMs for the Inspector to dump into memory
+computech.addressbus.roms = {}
 
 -- Figure out a better way to configure this?
 -- Note this doesn't count cables.
@@ -181,4 +183,8 @@ for xp = 0, 1 do
 		end
 	end
 end
+
+-- "non-essential" things:
+
+-- Various
 loadfile(mp .. "/utils.lua")()
