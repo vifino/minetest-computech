@@ -1,4 +1,8 @@
-local bit32 = computech.bit32
+local bit32, addressbus = computech.bit32, computech.addressbus
+local tilebox = {
+	type = "fixed",
+	fixed = {{-0.5, -0.5, -0.5, 0.5, -0.3, 0.5}},
+}
 local function register_ram(kb)
 	local bytes = kb * 1024
 	local cache = {}
@@ -13,6 +17,9 @@ local function register_ram(kb)
 		local cin = ci(pos)
 		if not cache[cin] then
 			cache[cin] = minetest.get_meta(pos):get_string("m")
+			if not cache[cin] then
+				cache[cin] = string.rep(string.char(0), bytes)
+			end
 		end
 		return cache[cin]:byte(addr + 1)
 	end
@@ -48,7 +55,12 @@ local function register_ram(kb)
 	end
 	minetest.register_node("computech_addressbus:ram" .. kb, {
 		description = "Computech RAM (" .. kb .. "KiB)",
-		tiles = {"computech_addressbus_ram.png"},
+		tiles = {"computech_addressbus_ram_top.png", "computech_addressbus_ram_top.png",
+			"computech_addressbus_port.png", "computech_addressbus_port.png",
+			"computech_addressbus_port.png", "computech_addressbus_port.png"},
+		paramtype = "light",
+		drawtype = "nodebox",
+		node_box = tilebox,
 		groups = {dig_immediate = 2},
 		on_construct = function (pos)
 			reset_ram(pos)
@@ -82,9 +94,7 @@ local function register_ram(kb)
 				end
 			end,
 			extent = function (pos, msg, dir)
-				if msg.params[1] < bytes then
-					msg.respond(bytes - 1)
-				end
+				msg.respond(bytes)
 			end,
 			flush = function (pos, msg, dir)
 				flush_ram(pos)
@@ -113,7 +123,12 @@ local function update_inspector(pos)
 end
 minetest.register_node("computech_addressbus:inspector", {
 	description = "Computech Addressbus Inspector",
-	tiles = {"computech_addressbus_inspector.png"},
+	tiles = {"computech_addressbus_inspector_top.png", "computech_addressbus_inspector_top.png",
+		"computech_addressbus_port.png", "computech_addressbus_port.png",
+		"computech_addressbus_port.png", "computech_addressbus_port.png"},
+	paramtype = "light",
+	drawtype = "nodebox",
+	node_box = tilebox,
 	groups = {dig_immediate = 2},
 	on_construct = function (pos)
 		update_inspector(pos)
@@ -138,14 +153,141 @@ minetest.register_node("computech_addressbus:inspector", {
 		local a = bit32.band(0xFFFFFFFF, meta:get_int("address"))
 		if fields["ar"] then
 			local v = 0xFFFFFFFF
-			computech.addressbus.send_all(pos, computech.addressbus.wrap_message("read32", {a}, function (r) v = bit32.band(v, r) end))
+			addressbus.send_all(pos, addressbus.wrap_message("read32", {a}, function (r) v = bit32.band(v, r) end))
 			meta:set_string("value", tostring(v))
 		end
 		if fields["aw"] then
-			computech.addressbus.send_all(pos, computech.addressbus.wrap_message("write32", {a, v}, function() end))
+			addressbus.send_all(pos, addressbus.wrap_message("write32", {a, v}, function() end))
 		end
 		update_inspector(pos)
-		computech.addressbus.send_all(pos, computech.addressbus.wrap_message("flush", {}, function() end))
+		addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
 	end,
 	computech_addressbus = {}
+})
+
+-- communications helper!
+minetest.register_node("computech_addressbus:1wr", {
+	description = "Computech 'A Word Of RAM'",
+	tiles = {"computech_addressbus_1wr_top.png", "computech_addressbus_1wr_top.png",
+		"computech_addressbus_port.png", "computech_addressbus_port.png",
+		"computech_addressbus_port.png", "computech_addressbus_port.png"},
+	paramtype = "light",
+	drawtype = "nodebox",
+	node_box = tilebox,
+	groups = {dig_immediate = 2},
+	on_construct = function (pos)
+		local meta = minetest.get_meta(pos)
+		meta:set_int("val", 0)
+		meta:set_string("infotext", "Value: 0")
+	end,
+	computech_addressbus = {
+		read32 = function (pos, msg, dir)
+			local meta = minetest.get_meta(pos)
+			local addr = msg.params[1]
+			if addr == 0 then
+				msg.respond(bit32.band(meta:get_int("val"), 0xFFFFFFFF))
+			end
+		end,
+		write32 = function (pos, msg, dir)
+			local meta = minetest.get_meta(pos)
+			if msg.params[1] == 0 then
+				meta:set_int("val", msg.params[2])
+				meta:set_string("infotext", "Value: " .. msg.params[2])
+				msg.respond()
+			end
+		end,
+		extent = function (pos, msg, dir)
+			msg.respond(4)
+		end,
+		flush = function (pos, msg, dir)
+		end
+	}
+})
+
+-- For 3-way components, looking from the sideport:
+-- 1 is right, 2 is sideport, 3 is left.
+-- For 2-way components, same but without 2.
+local function find_direction(pos, dir)
+	local n = minetest.get_node(pos)
+	if not n.param2 then return nil end
+	-- presumably, 0 is "front". This has backwards mapping and a forward AB direction map.
+	local mapping = {
+		"000010",
+		"100000",
+		"000001",
+		"010000",
+	}
+	return bit32.band(dir - n.param2, 3), mapping[((dir + n.param2) % 4) + 1]
+end
+
+local function mcu_get_extent(pos, sideport, places)
+	local _, result = nil, nil
+	if sideport then
+		_, result = find_direction(pos, 2)
+	else
+		_, result = find_direction(pos, 1)
+	end
+	local ext = 0
+	local msg = addressbus.wrap_message("extent", {}, function (extn)
+		if extn > ext then
+			ext = extn
+		end
+	end)
+	addressbus.send_all(pos, msg, result)
+	return ext
+end
+
+
+local function mcu_forwarder(pos, msg, dir)
+	if find_direction(pos, dir) == 3 then
+		local a = mcu_get_extent(pos, true, msg.places)
+		-- Re-package the message.
+		local newmsg = addressbus.wrap_message(msg.id, {msg.params[1], msg.params[2]}, msg.respond)
+		local portdir = 2
+		if msg.params[1] >= a then
+			newmsg.params[1] = bit32.band(newmsg.params[1] - a, 0xFFFFFFFF)
+			portdir = 1
+		end
+		local _, port = find_direction(pos, portdir)
+		addressbus.send_all(pos, newmsg, port)
+	end
+end
+minetest.register_node("computech_addressbus:mcu", {
+	description = "Computech Memory Chain Unit",
+	tiles = {"computech_addressbus_mcu_top.png", "computech_addressbus_mcu_top.png",
+		"computech_addressbus_port.png", "computech_addressbus_port.png",
+		"computech_addressbus_block.png", "computech_addressbus_port.png"},
+	paramtype = "light",
+	drawtype = "nodebox",
+	node_box = tilebox,
+	paramtype2 = "facedir",
+	groups = {dig_immediate = 2},
+	computech_addressbus = {
+		read32 = mcu_forwarder,
+		write32 = mcu_forwarder,
+		extent = function (pos, msg, dir)
+			if find_direction(pos, dir) == 3 then
+				-- CPU wants to know extent.
+				local a = mcu_get_extent(pos, true, msg.places)
+				local b = mcu_get_extent(pos, false, msg.places)
+				return a + b
+			end
+		end,
+		flush = function (pos, msg, dir)
+			if find_direction(pos, dir) == 3 then
+				local _, flushA = find_direction(pos, 1)
+				local _, flushB = find_direction(pos, 2)
+				addressbus.send_all(pos, msg, flushA)
+				addressbus.send_all(pos, msg, flushB)
+			end
+		end,
+		interrupt = function (pos, msg, dir)
+			-- If interrupt is CPU-side, ignore.
+			-- Otherwise, it must be forwarded (as-is for simplicity)
+			if find_direction(pos, dir) ~= 3 then
+				local _, cpudir = find_direction(pos, 3)
+				addressbus.send_all(pos, msg, cpudir)
+			end
+		end
+	}
 })

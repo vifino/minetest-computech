@@ -7,9 +7,14 @@ Messages are:
             params[2]: data
             respond(): Confirms a write occurred.
             Behavior for senders should be to consider 0 responses "memory error", otherwise things are fine.
- "extent": params[1]: address
-           respond(extent): Return the last valid byte address. For a 64k RAM, this would be 0xFFFF.
+ "extent": respond(extent):
+           Return the length, in bytes,
+            of the region of memory from address 0 'upwards'.
+           For a 64k RAM, this would be 0x10000.
            Behavior for senders should be to use the longest response.
+           (previously, params[1] was a start address, and the last valid address was used,
+            but that was changed for simplicity.
+            The only reason this is needed is to measure contiguous area starting from 0 anyway.)
  "interrupt": params[1]: PID (Should be originally sent as zero.
                               Memory Chain Units should offset PID, so memory and PID layout matches.)
               This is the only device->CPU message, and should set the interrupt waiting latch.

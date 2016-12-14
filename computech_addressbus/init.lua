@@ -7,6 +7,13 @@ local mp = minetest.get_modpath("computech_addressbus")
 local addressbus = {}
 computech.addressbus = addressbus
 
+-- Figure out a better way to configure this?
+-- Note this doesn't count cables.
+local depthlimit = 32
+
+-- Global variable used to work out things.
+local currentdepth = 0
+
 -- Wrap a message for transmission.
 function addressbus.wrap_message(id, param, rsp)
 	local m = {}
@@ -39,7 +46,14 @@ function addressbus.send(pos, msg, dir)
 		end
 		if nodedef.computech_addressbus then
 			if nodedef.computech_addressbus[msg.id] then
+				currentdepth = currentdepth + 1
+				if currentdepth >= depthlimit then
+					print("computech_addressbus/init.lua: >" .. depthlimit .. " non-cable devices in a route.")
+					currentdepth = currentdepth - 1
+					return false
+				end
 				nodedef.computech_addressbus[msg.id](pos, msg, minetest.dir_to_facedir(vector.multiply(dir, -1), true))
+				currentdepth = currentdepth - 1
 				return true
 			end
 		end
@@ -48,7 +62,7 @@ function addressbus.send(pos, msg, dir)
 end
 function addressbus.send_all(pos, msg, str)
 	if str == nil then str = "111111" end
-	local dirs={
+	local dirs = {
 		{x = 1, y = 0, z = 0},
 		{x = -1, y = 0, z = 0},
 		{x = 0, y = 1, z = 0},
