@@ -1,52 +1,55 @@
 local bit32 = computech.bit32
 local function register_ram(kb)
 	local bytes = kb * 1024
-	local rcache = {}
 	local cache = {}
-	local function ci(pos, addr)
-		return pos.x .. ":" .. pos.y .. ":" .. pos.z .. ":" .. addr
-	end
-	local function write_ram(pos, addr, value)
-		if addr >= bytes then
-			return
-		end
-		local cin = ci(pos, addr)
-		if rcache[cin] == value then
-			return
-		end
-		rcache[cin] = value
-		cache[cin] = value
+	local wcache = {}
+	local function ci(pos)
+		return pos.x .. ":" .. pos.y .. ":" .. pos.z
 	end
 	local function read_ram(pos, addr)
 		if addr >= bytes then
 			return 0xFF
 		end
-		local cin = ci(pos, addr)
-		if not rcache[cin] then
-			rcache[cin] = minetest.get_meta(pos):get_int("m" .. addr)
+		local cin = ci(pos)
+		if not cache[cin] then
+			cache[cin] = minetest.get_meta(pos):get_string("m")
 		end
-		return rcache[cin]
+		return cache[cin]:byte(addr + 1)
+	end
+	local function write_ram(pos, addr, value)
+		if addr >= bytes then
+			return
+		end
+		local cin = ci(pos)
+		-- this call also initializes cache
+		if read_ram(pos, addr) == value then
+			return
+		end
+		local d = cache[cin]
+		local s, e = d:sub(1, addr), d:sub(addr + 2)
+		cache[cin] = table.concat({s, string.char(value), e})
+		wcache[cin] = true
 	end
 	local function flush_ram(pos)
-		for addr = 0, bytes - 1 do
-			local cin = ci(pos, addr)
-			if cache[cin] then
-				minetest.get_meta(pos):set_int("m" .. addr, cache[cin])
-				cache[cin] = nil
-			end
+		local cin = ci(pos)
+		if cache[cin] and wcache[cin] then
+			minetest.get_meta(pos):set_string("m", cache[cin])
+			-- cache continues to exist.
+			wcache[cin] = nil
 		end
 	end
 	local function reset_ram(pos)
-		for i = 0, bytes - 1 do
-			write_ram(pos, i, 0)
-		end
-		flush_ram(pos)
+		-- reset cache
+		local cin = ci(pos)
+		cache[cin] = nil
+		wcache[cin] = nil
+		local nw = string.rep(string.char(0), bytes)
+		minetest.get_meta(pos):set_string("m", nw)
 	end
 	minetest.register_node("computech_addressbus:ram" .. kb, {
 		description = "Computech RAM (" .. kb .. "KiB)",
 		tiles = {"computech_addressbus_ram.png"},
 		groups = {dig_immediate = 2},
-		paramtype = "light",
 		on_construct = function (pos)
 			reset_ram(pos)
 		end,
@@ -112,7 +115,6 @@ minetest.register_node("computech_addressbus:inspector", {
 	description = "Computech Addressbus Inspector",
 	tiles = {"computech_addressbus_inspector.png"},
 	groups = {dig_immediate = 2},
-	paramtype = "light",
 	on_construct = function (pos)
 		update_inspector(pos)
 	end,
@@ -143,6 +145,7 @@ minetest.register_node("computech_addressbus:inspector", {
 			computech.addressbus.send_all(pos, computech.addressbus.wrap_message("write32", {a, v}, function() end))
 		end
 		update_inspector(pos)
+		computech.addressbus.send_all(pos, computech.addressbus.wrap_message("flush", {}, function() end))
 	end,
 	computech_addressbus = {}
 })
