@@ -54,7 +54,8 @@ computech.base_modules = {
 	"msgpack",
 	"com",
 	"cmds",
-	"bettertimers"
+	"bettertimers",
+	"bit32"
 }
 
 for i=1, #computech.base_modules do

@@ -1,0 +1,19 @@
+Addressbus, at it's core, is a simple message network.
+Messages are:
+ "read32": params[1]: address (Should be aligned)
+           respond(w32): Return the 32-bit word at that address.
+           Behavior for senders should be to AND responses.
+ "write32": params[1]: address (Should be aligned)
+            params[2]: data
+            respond(): Confirms a write occurred.
+            Behavior for senders should be to consider 0 responses "memory error", otherwise things are fine.
+ "extent": params[1]: address
+           respond(extent): Return the last valid byte address. For a 64k RAM, this would be 0xFFFF.
+           Behavior for senders should be to use the longest response.
+ "interrupt": params[1]: PID (Should be originally sent as zero.
+                              Memory Chain Units should offset PID, so memory and PID layout matches.)
+              This is the only device->CPU message, and should set the interrupt waiting latch.
+              If the user wants to actually use interrupts,
+               an interrupt helper should be in place
+               to allow proper queue semantics. (Of course, for a custom-built OS and system, anything can be used.)
+ 
