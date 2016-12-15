@@ -69,7 +69,7 @@ local function register_ram(kb)
 			-- Note: This routine won't work for a 4GB RAM.
 			-- However, such a thing shouldn't ever exist.
 			read32 = function (pos, msg, dir)
-				local addr = msg.params[1]
+				local addr = assert(msg.params[1])
 				if addr < bytes then
 					local a = read_ram(pos, addr) or 0xFF
 					local b = read_ram(pos, addr + 1) or 0xFF
@@ -79,9 +79,9 @@ local function register_ram(kb)
 				end
 			end,
 			write32 = function (pos, msg, dir)
-				local addr = msg.params[1]
+				local addr = assert(msg.params[1])
 				if addr < bytes then
-					local val = msg.params[2]
+					local val = assert(msg.params[2])
 					local a = bit32.band(val, 0xFF000000) / 0x1000000
 					local b = bit32.band(val, 0xFF0000) / 0x10000
 					local c = bit32.band(val, 0xFF00) / 0x100

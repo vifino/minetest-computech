@@ -8,10 +8,10 @@ local f = io.open(mp .. "/reb.bin", "rb")
 addressbus.roms["computech_addressbus:zpu:reb"] = f:read(0x80000)
 f:close()
 
-local zpu = loadfile(mp .. "/zpu.lua")
-local zpu_emus = loadfile(mp .. "/zpu_emus.lua")
-local globalZPU = zpu()
-zpu_emus(globalZPU)
+-- Load ZPU, zpu_emus and set bit library.
+local zpu = dofile(mp .. "/zpu.lua")
+zpu.set_bit32(computech.bit32)
+zpu:apply(dofile(mp .. "/zpu_emus.lua"))
 
 local bit32, bettertimers = computech.bit32, computech.bettertimers
 
@@ -72,43 +72,51 @@ local function reset_zpu(pos)
 	local timer = minetest.get_node_timer(pos)
 	timer:start(1.0)
 end
+
+local function zpu_get32(zpu_inst, addr)
+	if bit32.band(addr, 3) ~= 0 then return 0xFFFFFFFF end
+	if addr == 0x80000024 then
+		-- UART(O) - there is always space, which means 0x100 must be set.
+		return 0x100
+	end
+	if addr == 0x80000028 then
+		-- UART(I)
+		local meta = minetest.get_meta(zpu_inst.pos)
+		local buf = meta:get_string("cinbuf")
+		if buf:len() == 0 then return 0 end
+		meta:set_string("cinbuf", buf:sub(2))
+		return buf:byte(1) + 0x100
+	end
+	local data = 0xFFFFFFFF
+	addressbus.send_all(zpu_inst.pos, addressbus.wrap_message("read32", {addr}, function(nd)
+		data = bit32.band(data, nd)
+	end))
+	return data
+end
+
+local update_console = false
+local function zpu_set32(zpu_inst, addr, data)
+	if bit32.band(addr, 3) ~= 0 then return 0xFFFFFFFF end
+	if addr == 0x80000024 then
+		-- UART(O)
+		console_append(zpu_inst.pos, string.char(bit32.band(data, 0xFF)))
+		update_console = true
+		return
+	end
+	addressbus.send_all(zpu_inst.pos, addressbus.wrap_message("write32", {addr, data}, function() end))
+end
+
+local globalZPU = zpu.new(zpu_get32, zpu_set32)
+
 local function zputick(pos)
-	local update_console = false
+	update_console = false
 	local meta = minetest.get_meta(pos)
 	globalZPU.rIP = meta:get_int("ip")
 	globalZPU.rSP = meta:get_int("sp")
-	globalZPU.get32 = function (addr)
-		if bit32.band(addr, 3) ~= 0 then return 0xFFFFFFFF end
-		if addr == 0x80000024 then
-			-- UART(O) - there is always space, which means 0x100 must be set.
-			return 0x100
-		end
-		if addr == 0x80000028 then
-			-- UART(I)
-			local buf = meta:get_string("cinbuf")
-			if buf:len() == 0 then return 0 end
-			meta:set_string("cinbuf", buf:sub(2))
-			return buf:byte(1) + 0x100
-		end
-		local data = 0xFFFFFFFF
-		addressbus.send_all(pos, addressbus.wrap_message("read32", {addr}, function(nd)
-			data = bit32.band(data, nd)
-		end))
-		return data
-	end
-	globalZPU.set32 = function (addr, data)
-		if bit32.band(addr, 3) ~= 0 then return 0xFFFFFFFF end
-		if addr == 0x80000024 then
-			-- UART(O)
-			console_append(pos, string.char(bit32.band(data, 0xFF)))
-			update_console = true
-			return
-		end
-		addressbus.send_all(pos, addressbus.wrap_message("write32", {addr, data}, function() end))
-	end
+	globalZPU.pos = pos
 	globalZPU.fLastIM = meta:get_int("im") ~= 0
 	for i = 1, zpu_clock do
-		local disasm = globalZPU.run()
+		local disasm = globalZPU:run()
 		if not disasm then
 			-- Error occurred, instant reboot.
 			-- (To fix things, remove the ZPU first!)

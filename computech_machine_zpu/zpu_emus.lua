@@ -1,244 +1,240 @@
--- ZPU Emulator: EMULATE speedups
--- Used to avoid needing crt0.S and co.
+-- ZPU Emulator: EMULATE implementations.
+-- Quite nice speed up. Used to avoid needing crt0.5 and co.
+-- Original by gamemanj, heavily tweaked/rewritten by vifino.
+--
+-- require this and pass the result in to the ZPU library's apply.
+-- Example:
+-- zpu:apply(require("zpu_emus")) -- now globally loaded.
 
--- Pass in the ZPU, and it will implement some EMULATE opcodes.
+--[[
+  The MIT License (MIT)
 
--- Right now, 6 implemented operations are untested.
--- ULESSTHAN, EQBRANCH, 
+  Copyright (c) 2016 Adrian Pistol
 
--- Licence:
--- I, gamemanj, release this code into the public domain.
--- I make no guarantees or provide any warranty,
---  implied or otherwise, with this code.
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
 
--- Debug config --
--- For figuring out if there's something horribly wrong with the testcase
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+--]]
+
+
+-- Debug config
+-- For figuring out if there's something horribly wrong with the testcase.
 local usage_trace = false
 
--- Globals --
+-- Place holders for bit functions
+local band, bor, bxor, lshift, rshift
 
-local args = {...}
-local zpu = args[1]
-local emulates = {}
-local unused_emulates = 0 -- this is incremented when emulates are added and usage_trace is set
+-- Localized functions
+local mceil, mfloor = math.ceil, math.floor
 
--- utils --
-local bitAnd = zpu.bitAnd
-local bitOr = zpu.bitOr
-local bitXor = zpu.bitXor
-local bitShl = zpu.bitShl
-local bitShr = zpu.bitShr
-
+-- Utils
 local function a32(v)
- return bitAnd(v, 0xFFFFFFFF)
+	return band(v, 0xFFFFFFFF)
 end
 local function sflip(v)
- v = a32(v)
- if bitAnd(v, 0x80000000) ~= 0 then
-  return v - 0x100000000
- end
- return v
+	v = a32(v)
+	if band(v, 0x80000000) ~= 0 then
+		return v - 0x100000000
+	end
+	return v
 end
 local function mkbool(v)
- if v then return 1 else return 0 end
+	return v and 1 or 0
 end
-local function advip()
- zpu.rIP = a32(zpu.rIP + 1)
-end
-
--- getb and setb are the internal implementation of LOADB and STOREB,
--- and are thus heavily endianness-dependent.
-local function getb(a)
- local s = (24 - bitShl(bitAnd(a, 3), 3))
- local av = zpu.get32(bitAnd(a, 0xFFFFFFFC))
- return bitAnd(bitShr(av, s), 0xFF)
+local function advip(zpu_emu)
+	zpu_emu.rIP = a32(zpu_emu.rIP + 1)
 end
 
-local function setb(a, v)
- local s = (24 - bitShl(bitAnd(a, 3), 3))
- local b = bitXor(bitShl(0xFF, s), 0xFFFFFFFF)
- local av = zpu.get32(bitAnd(a, 0xFFFFFFFC))
- av = bitAnd(av, b)
- av = bitOr(av, bitShl(bitAnd(v, 0xFF), s))
- zpu.set32(bitAnd(a, 0xFFFFFFFC), av)
+-- getb and setb are the internal implementation of LOADB and STOREB
+-- and are thus heavily endianess dependant
+local function getb(zpu_emu, a)
+	local s = (24 - lshift(band(a, 3), 3))
+	local av = zpu_emu:get32(band(a, 0xFFFFFFFC))
+	return band(rshift(av, s), 0xFF)
+end
+local function setb(zpu_emu, a, v)
+	local s = (24 - lshift(band(a, 3), 3))
+	local b = bxor(lshift(0xFF, s), 0xFFFFFFFF)
+	local av = band(zpu_emu:get32(band(a, 0xFFFFFFFC)), b)
+	zpu_emu:set32(band( a, 0xFFFFFFFC), bor(av, lshift(band(v, 0xFF), s)))
 end
 
 -- geth and seth are the same but for halfwords.
 -- This implementation will just mess up if it gets a certain kind of misalignment.
--- (I have no better ideas - there is no reliable way to error-escape.)
+-- (I have no better ideas. There is no reliable way to error-escape.)
 
-local function geth(a)
- local s = (24 - bitShl(bitAnd(a, 3), 3))
- local av = zpu.get32(bitAnd(a, 0xFFFFFFFC))
- return bitAnd(bitShr(av, s), 0xFFFF)
+local function geth(zpu_emu, a)
+	local s = (24 - lshift(band(a, 3), 3))
+	local av = zpu_emu:get32(band(a, 0xFFFFFFFC))
+	return band(rshift(av, s), 0xFFFF)
 end
 
-local function seth(a, v)
- local s = (24 - bitShl(bitAnd(a, 3), 3))
- local b = bitXor(bitShl(0xFFFF, s), 0xFFFFFFFF)
- local av = zpu.get32(bitAnd(a, 0xFFFFFFFC))
- av = bitAnd(av, b)
- av = bitOr(av, bitShl(bitAnd(v, 0xFFFF), s))
- zpu.set32(bitAnd(a, 0xFFFFFFFC), av)
+local function seth(zpu_emu, a, v)
+	local s = (24 - lshift(band(a, 3), 3))
+	local b = bxor(lshift(0xFFFF, s), 0xFFFFFFFF)
+	local av = band(zpu_emu:get32(band(a, 0xFFFFFFFC)), b)
+	zpu_emu:set32(band(a, 0xFFFFFFFC), bor(av, lshift(band(v, 0xFFFF), s)))
 end
 
-local function eqbranch(bcf)
- local br = zpu.rIP + zpu.v_pop()
- local cond = bcf(zpu.v_pop())
- if cond then
-  zpu.rIP = br
- else
-  advip()
- end
+local function eqbranch(zpu_emu, bcf)
+	local br = zpu_emu.rIP + zpu_emu:v_pop()
+	if bcf(zpu_emu:v_pop()) then
+		zpu_emu.rIP = br
+	else
+		advip(zpu_emu)
+	end
 end
 
--- Generic left/right shifter, logical-only.
+-- Generic L/R shifter, logical-only.
 local function gpi_shift(v, lShift)
- if lShift >= 32 then return 0 end
- if lShift > 0 then return bitShl(v, lShift) end
- if lShift <= -32 then return 0 end
- if lShift < 0 then return bitShr(v, -lShift) end
- return 0
+	if (lShift >= 32) or (lShift <= -32) then return 0 end
+	if lShift > 0 then return lshift(v, lShift) end
+	if lShift < 0 then return rshift(v, -lShift) end
 end
 -- Generic multifunction shifter. Should handle any case with ease.
 local function gp_shift(v, lShift, arithmetic)
- -- "arithmetic" flag only matters for negative values.
- arithmetic = arithmetic and bitAnd(v, 0x80000000) ~= 0
- v = gpi_shift(v, lShift)
- if arithmetic and (lShift < 0) then
-  -- to explain: the "mask" is the bits that are defined in v post-operation.
-  -- Invert that, then OR, and you get right-shift sign extension.
-  local mask = gpi_shift(0xFFFFFFFF, lShift)
-  v = bitOr(v, bitXor(mask, 0xFFFFFFFF))
- end
- return v
+	arithmetic = arithmetica and band(v, 0x80000000) ~= 0
+	v = gpi_shift(v, lShift)
+	if arithmetic and (lShift < 0) then
+		return bor(v, bxor(gpi_shift(0xFFFFFFFF, lShift), 0xFFFFFFFF))
+	end
+	return v
 end
 
--- builders --
+-- EMULATE building
+local emulates = {}
+local unused_emulates = 0
 
 local function make_emu(id, name, code)
- local unused = true
- if usage_trace then
-  emulates[id] = {name, function (...)
-   if unused then
-    unused = false
-    io.stderr:write(name .. " used, " .. unused_emulates .. " to go\n") 
-    unused_emulates = unused_emulates - 1
-   end
-   return code(...)
-  end}
- else
-  emulates[id] = {name, code}
- end
- unused_emulates = unused_emulates + 1
+	local unused = true
+	if usage_trace then
+		emulates[id] = {name, function(...)
+			if unused then
+				unused = false
+				io.stderr:write(name .. " used, " .. unused_emulates .. " to go\n")
+				unused_emulates = unused_emulates - 1
+			end
+			return code(...)
+		end}
+	else
+		emulates[id] = {name, code}
+	end
+	unused_emulates = unused_emulates + 1
 end
 local function make_pair(id, name, code)
- make_emu(id, name, function ()
-  local a = zpu.v_pop()
-  local b = zpu.get32(zpu.rSP)
-  zpu.set32(zpu.rSP, code(a, b))
-  advip()
- end)
-end
-local function make_opair(id, name, code)
- make_emu(id, name, function ()
-  local a = zpu.v_pop()
-  local b = zpu.get32(zpu.rSP)
-  zpu.set32(zpu.rSP, code(b, a))
-  advip()
- end)
+	make_emu(id, name, function(zpu_emu)
+		local a = zpu_emu:v_pop()
+		local b = zpu_emu:get32(zpu_emu.rSP)
+		zpu_emu:set32(zpu_emu.rSP, code(a, b))
+		advip(zpu_emu)
+	end)
 end
 
--- The Actual Emulates --
+-- Actual emulates!
+-- Yay!
 
-make_emu(19, "LOADH", function () zpu.set32(zpu.rSP, geth(zpu.get32(zpu.rSP))) advip() end)
-make_emu(20, "STOREH", function ()
- local a = zpu.v_pop()
- local v = zpu.v_pop()
- seth(a, v)
- advip()
+make_emu(19, "LOADH", function(zpu_emu) zpu_emu:set32(zpu_emu.rSP, geth(zpu_emu, zpu_emu:get32(zpu_emu.rSP))) end)
+make_emu(20, "STOREH", function(zpu_emu) seth(zpu_emu, zpu_emu:v_pop(), zpu_emu:v_pop()) end)
+
+make_pair(4, "LESSTHAN", function(a, b) return mkbool(sflip(a) < sflip(b)) end)
+make_pair(5, "LESSTHANEQUAL", function(a, b) return mkbool(sflip(a) <= sflip(b)) end)
+make_pair(6, "ULESSTHAN", function(a, b) return mkbool(a < b) end)
+make_pair(7, "ULESSTHANEQUAL", function(a, b) return mkbool(a <= b) end)
+
+make_pair(9, "SLOWMULT", function(a, b) return band(a * b, 0xFFFFFFFF) end)
+
+make_pair(10, "LSHIFTRIGHT", function(a, b)
+	return gp_shift(b, -sflip(a), false)
+end)
+make_pair(11, "ASHIFTLEFT", function(a, b)
+	return gp_shift(b, sflip(a), true)
+end)
+make_pair(12, "ASHIFTRIGHT", function(a, b)
+	return gp_shift(b, -sflip(a), true)
 end)
 
-make_pair(4, "LESSTHAN", function (a, b) return mkbool(sflip(a) < sflip(b)) end)
-make_pair(5, "LESSTHANEQUAL", function (a, b) return mkbool(sflip(a) <= sflip(b)) end)
-make_pair(6, "ULESSTHAN", function (a, b) return mkbool(a < b) end)
-make_pair(7, "ULESSTHANEQUAL", function (a, b) return mkbool(a <= b) end)
+make_pair(14, "EQ", function(a, b) return mkbool(a == b) end)
+make_pair(15, "NEQ", function(a, b) return mkbool(a ~= b) end)
 
-make_pair(9, "SLOWMULT", function (a, b) return bitAnd(a * b, 0xFFFFFFFF) end)
-
--- For now, it is assumed that signed shifts are OK.
--- If not, remove the sflip(a) converter.
-make_pair(10, "LSHIFTRIGHT", function (a, b)
- return gp_shift(b, -sflip(a), false)
-end)
-make_pair(11, "ASHIFTLEFT", function (a, b)
- return gp_shift(b, sflip(a), true)
-end)
-make_pair(12, "ASHIFTRIGHT", function (a, b)
- return gp_shift(b, -sflip(a), true)
+make_emu(16, "NEQ", function(zpu_emu)
+	zpu_emu:set32(zpu_emu.rSP, a32(-sflip(zpu_emu:get32(zpu_emu.rSP))))
+	advip(zpu_emu)
 end)
 
-make_pair(14, "EQ", function (a, b) return mkbool(a == b) end)
-make_pair(15, "NEQ", function (a, b) return mkbool(a ~= b) end)
+make_pair(17, "SUB", function(b, a) return band(a - b, 0xFFFFFFFF) end)
+make_pair(18, "XOR", function(b, a) return band(bxor(a, b), 0xFFFFFFFF) end)
 
-make_emu(16, "NEQ", function ()
- local v = zpu.get32(zpu.rSP)
- -- negate is implemented in C via some complex method guaranteed to work,
- -- but does anyone actually care?
- v = a32(-sflip(v))
- zpu.set32(zpu.rSP, v)
- advip()
-end)
-
-make_opair(17, "SUB", function (a, b) return bitAnd(a - b, 0xFFFFFFFF) end)
-make_opair(18, "XOR", function (a, b) return bitAnd(bitXor(a, b), 0xFFFFFFFF) end)
-
-make_emu(19, "LOADB", function () zpu.set32(zpu.rSP, getb(zpu.get32(zpu.rSP))) advip() end)
-make_emu(20, "STOREB", function ()
- local a = zpu.v_pop()
- local v = zpu.v_pop()
- setb(a, v)
- advip()
+make_emu(19, "LOADB", function(zpu_emu) zpu_emu:set32(zpu_emu.rSP, getb(zpu_emu, zpu_emu:get32(zpu_emu.rSP))) advip(zpu_emu) end)
+make_emu(20, "STOREB", function(zpu_emu)
+	setb(zpu_emu, zpu_emu:v_pop(), zpu_emu:v_pop())
+	advip(zpu_emu)
 end)
 
 local function rtz(v)
- if v < 0 then return math.ceil(v) end
- return math.floor(v)
+	if v < 0 then return mceil(v) end
+	return mfloor(v)
 end
--- kind of weird, but it gets the job done
 local function cmod(a, b)
- local r = rtz(a / b)
- local m = a - (r * b)
- return m
+	return a - (rtz(a / b) * b)
 end
 make_pair(21, "DIV", function (a, b) return a32(rtz(sflip(a) / sflip(b))) end)
 make_pair(22, "MOD", function (a, b) return a32(cmod(sflip(a), sflip(b))) end)
 
-make_emu(23, "EQBRANCH", function () eqbranch(function(b) return b == 0 end) end)
-make_emu(24, "NEQBRANCH", function () eqbranch(function(b) return b ~= 0 end) end)
+make_emu(23, "EQBRANCH", function(zpu_emu) return eqbranch(zpu_emu, function(b) return b == 0 end) end)
+make_emu(24, "NEQBRANCH", function(zpu_emu) return eqbranch(zpu_emu, function(b) return b ~= 0 end) end)
 
-make_emu(25, "POPPCREL", function () zpu.rIP = bitAnd(zpu.rIP + zpu.v_pop(), 0xFFFFFFFF) end)
+make_emu(25, "POPPCREL", function(zpu_emu) zpu_emu.rIP = band(zpu_emu.rIP + zpu_emu:v_pop(), 0xFFFFFFFF) end)
 
-make_emu(29, "PUSHSPADD", function ()
- local newP = bitAnd(bitAnd(bitShl(zpu.get32(zpu.rSP), 2), 0xFFFFFFFF) + zpu.rSP, 0xFFFFFFFC)
- zpu.set32(zpu.rSP, newP)
- advip()
+make_emu(29, "PUSHSPADD", function(zpu_emu)
+	zpu_emu:set32(zpu_emu.rSP, band(band(lshift(zpu_emu:get32(zpu_emu.rSP), 2), 0xFFFFFFFF) + zpu_emu.rSP, 0xFFFFFFFC))
+	advip(zpu_emu)
 end)
 
-make_emu(31, "CALLPCREL", function ()
- local routine = bitAnd(zpu.rIP + zpu.get32(zpu.rSP), 0xFFFFFFFF)
- zpu.set32(zpu.rSP, bitAnd(zpu.rIP + 1, 0xFFFFFFFF))
- zpu.rIP = routine
+make_emu(31, "CALLPCREL", function(zpu_emu)
+	local routine = band(zpu_emu.rIP + zpu_emu:get32(zpu_emu.rSP), 0xFFFFFFFF)
+	zpu_emu:set32(zpu_emu.rSP, band(zpu_emu.rIP + 1, 0xFFFFFFFF))
+	zpu_emu.rIP = routine
 end)
 
--- The final code --
-
-local emu = zpu.op_emulate
-function zpu.op_emulate(op)
- if emulates[op] then
-  emulates[op][2]()
-  return emulates[op][1]
- end
- if usage_trace then io.stderr:write("zpu_emus.lua: usage trace found " .. op .. " hasn't been written yet.") end
- return emu(op)
+-- Installation helper
+local function assert_bitfn(bit, name)
+	assert(bit[name], "zpu_emus: Did not find function "..name.." in bitlib. We need it.")
 end
+local function install_bit(bl)
+	assert_bitfn(bl, "band") band = bl.band
+	assert_bitfn(bl, "bor") bor = bl.bor
+	assert_bitfn(bl, "bxor") bxor = bl.bxor
+	assert_bitfn(bl, "lshift") lshift = bl.lshift
+	assert_bitfn(bl, "rshift") rshift = bl.rshift
+end
+
+return function(zpu)
+	-- check bitlib, we need it too.
+	install_bit(zpu.bit32)
+	local old_emu = zpu.op_emulate
+	zpu.op_emulate = function(zpu_emu, op)
+		local emulate = emulates[op]
+		if emulate then
+			emulate[2](zpu_emu)
+			return emulate[1]
+		end
+		if usage_trace then io.stderr:write("zpu_emus: usage trace found "..op.." hasn't been written yet.") end
+		return old_emu(zpu_emu, op)
+	end
+	return true
+end
+
