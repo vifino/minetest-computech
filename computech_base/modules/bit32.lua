@@ -1,193 +1,277 @@
--- bit32 emulation.
+-- bitops selection
+-- since the available bitops vary, we need to pick a working one.
 
--- Licence:
--- I, 20kdc, release this code into the public domain.
--- I make no guarantees or provide any warranty,
---  implied or otherwise, with this code.
+-- This library tries it's hardest to get a proper bit32 compatible library going.
+-- It tries the real bit32, wraps luajit's bit to be safe, uses Lua 5.2 operators
+-- and if all before fail, it'll use pure lua fallbacks.
 
--- Not entirely accurate, but less buggy than the implementations it has to work around.
+--[[
+  The MIT License (MIT)
 
--- For absolutely strict mode, enable this
--- (it will use the slower emulation routines, which do more checking on shifts/etc
---  and throw errors if unexpected stuff is likely to happen)
-local strict = false
+  Copyright (c) 2016 Adrian Pistol
 
-local ourBit32 = {}
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
 
-local bit32 = bit32 or bit
-if not bit32 then
- pcall(function ()
-  bit32 = require("bit32")
- end)
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+--]]
+
+local bitlib
+
+-- debug
+local _enable_debug = ...
+local debug
+if _enable_debug then
+	debug = function(msg) io.stderr:write(msg.."\n") end
+else
+	debug = function() end
 end
 
--- REMEMBER THIS IS ALL IN THE PUBLIC DOMAIN.
--- If you want to steal my routines without attribution, just do so.
--- If I catch someone who knows about these reimplementing for any reason other than performance,
--- (because they ARE slow)
---  I'll shout at them a bit!
-
-local function bitConv(na, nb, f)
- na = math.floor(na)
- nb = math.floor(nb)
- -- Fixup negative values before beginning, just in case
- while na < 0 do
-  na = na + 0x100000000
- end
- while nb < 0 do
-  nb = nb + 0x100000000
- end
- local r = 0
- local p = 1
- for i = 1, 32 do
-  local pa = na / 2
-  local pb = nb / 2
-  na = math.floor(pa)
-  nb = math.floor(pb)
-  if f(pa ~= na, pb ~= nb) then
-   r = r + p
-  end
-  p = p * 2
- end
- return r
+local function get_bit32()
+	if bit32 then
+		return bit32
+	else
+		-- try to require bit32
+		local success, res = pcall(require, "bit32")
+		if success then
+			return res
+		end
+	end
+	return {}
 end
 
-local function getBitOp(lua52, b32, testpoint, emergency)
- -- Neither method seems to be faster,
- -- and either way speed has been hurt by the "no direct bitops" workarounds.
- -- As it is, the "emergency" method is the slowest, but you knew that already.
- if (not strict) and bit32 then
-  if bit32[b32] then
-   if bit32[b32](5, 4) == testpoint then
-    return bit32[b32]
-   --else
-   -- io.stderr:write("Native function " .. b32 .. " was bad, using fallback\n")
-   end
-  end
- end
- local rvf = loadstring("return function (a, b) return a " .. lua52 .. " b end")
- if strict then rvf = nil end
- if not rvf then
-  local r = function (a, b) return emergency(a, b) end
-  if r(5, 4) ~= testpoint then error("internal emergency-bitops test failure " .. b32) end
-  return r
- end
- return rvf()
+local function bit_l52(op, single)
+	if not single then
+		return loadstring("return function(a, b) return a "..op.." b end end")
+	end
+	return loadstring("return function(x) return "..op.."x end end")
 end
 
-local bitAnd = getBitOp("&", "band", 4, function (a, b)
- -- This is often used where the situation warrants a reconvert back to bit32.
- -- So, don't assume it will receive sane input.
-
- -- However, there are a lot of cases where the "convert to bit32" behavior is used.
- -- Which are currently rather slow in the "no need to convert" case.
- -- These neatly cover a good portion of these "there was no need to do this" cases,
- --  speeds things up enormously.
-
- if (b == 0xFFFFFFFF) and (a >= 0) and (a <= 0xFFFFFFFF) then return math.floor(a) end
- if (a == 0xFFFFFFFF) and (b >= 0) and (b <= 0xFFFFFFFF) then return math.floor(b) end
- if (b == 0xFFFFFFFF) and (a < 0) then
-  a = math.floor(0x100000000 + a)
-  if (a >= 0) and (a <= 0xFFFFFFFF) then return a end
- end
- if (a == 0xFFFFFFFF) and (b < 0) then
-  b = math.floor(0x100000000 + b)
-  if (b >= 0) and (b <= 0xFFFFFFFF) then return b end
- end
-
- return bitConv(a, b, function (a, b) return a and b end)
-end)
--- Most of these don't go through sanity checks - and32 is used as the "ensure bit32" function.
-local bitOr = getBitOp("|", "bor", 5, function (a, b)
- return bitConv(a, b, function (a, b) return a or b end)
-end)
-local bitXor = getBitOp("~", "bxor", 1, function (a, b)
- -- believe it or not, even boolean XOR is not available
- return bitConv(a, b, function (a, b) return (a or b) and (not (a and b)) end)
-end)
--- NOTE: These are considered to be logical shifts.
-local bitShl = getBitOp("<<", "lshift", 80, function (a, b)
- if b < 0 then error("bad shift") end
- if a < 0 then error("bad input") end
- if b >= 32 then return 0 end
- while b > 0 do
-  local s = b
-  -- prevent potential bad things due to floating point
-  if s > 14 then s = 14 end
-  
-  a = math.floor(a * (2 ^ s))
-  a = a - (math.floor(a / 0x100000000) * 0x100000000)
-  b = b - s
- end
- return a
-end)
-local bitShr = getBitOp(">>", "rshift", 0, function (a, b)
- if b < 0 then error("bad shift") end
- if a < 0 then error("bad input") end
- return math.floor(a / (2 ^ b))
-end)
-
-if bitShl(0x80000000, 1) == 0x100000000 then
- --io.stderr:write("bitShl could return >32 bits, workaround in place.\n")
- local bitShlBackup = bitShl
- bitShl = function (v, s)
-  return bitAnd(bitShlBackup(v, s), 0xFFFFFFFF)
- end
+-- pick bit op from a list of candidates
+local function bit_pick_fn(res, fn_list)
+	for fni=1, #fn_list do
+		local fn = fn_list[fni]
+		if fn then
+			local success, ret = pcall(fn, 5, 4)
+			if success then
+				if ret == res then
+					return fn
+				end
+				debug("bitops: Tried candidate no. "..tostring(fni)..", yielded "..tostring(ret).." but wanted "..tostring(res))
+			end
+		end
+	end
 end
 
-if bitShl(1, 32) == 1 then
- --io.stderr:write("bitShl will wrap at 32 (assuming same for bitShr)\n")
- local bitShlBackup = bitShl
- bitShl = function (v, s)
-  if s > 31 then return 0 end
-  return bitShlBackup(v, s)
- end
- local bitShrBackup = bitShr
- bitShr = function (v, s)
-  if s > 31 then return 0 end
-  return bitShrBackup(v, s)
- end
+-- generate a bit library of all the available options
+local function bit_select(inst_tests)
+	local lib = {}
+	for inst, candidates in pairs(inst_tests) do
+		local name, test, fixup = inst[1], inst[2], inst[3]
+		local tmp = bit_pick_fn(test, candidates)
+		if not tmp then
+			error("bitops: No working candidate for "..name)
+		end
+		if unifixer then
+			tmp = unifixer(lib, name, tmp)
+		end
+		if fixup then
+			tmp = fixup(tmp)
+		end
+		lib[name] = tmp
+	end
+	return lib
 end
 
-if bitShr(0x80000000, 24) ~= 128 then
- --io.stderr:write("bitShr was arithmetic, this is really bad! Still, this is known now - speed gains can still be gotten.")
- local bitShrBackup = bitShr
- bitShr = function (v, s)
-  local mask = 0xFFFFFFFF
-  return bitAnd(bitShrBackup(v, s), bitShrBackup(mask, s))
- end
+-- fallback bit library
+local fallback = {}
+local mfloor = math.floor
+
+local function checkint32(x)
+	return mfloor(x) % 0x100000000
 end
 
--- LuaJIT: Reimplementing Lua APIs, badly.
-if bitAnd(-1, -2) == -2 then
- --io.stderr:write("Logic functions are SIGNED (not unsigned) 32-bit. Seriously. You're probably using LuaJIT.\n")
- local function fixNegVal(i)
-  local j = i
-  -- clean up value, and throw it through.
-  while i < 0 do
-   i = i + 0x100000000
-  end
-  return i
- end
- local function fixNegValWrap(f)
-  return function (a, b)
-   local v = f(fixNegVal(a), fixNegVal(b))
-   return fixNegVal(v)
-  end
- end
- bitAnd = fixNegValWrap(bitAnd)
- bitOr = fixNegValWrap(bitOr)
- bitXor = fixNegValWrap(bitXor)
- -- These shouldn't get negative values in shift
- -- (it deliberately errors in zero-primitive mode if they do)
- bitShl = fixNegValWrap(bitShl)
- bitShr = fixNegValWrap(bitShr)
+local function checkshift(s)
+	if (s < 0) then error("bad shift") end
+	return mmin(32, s)
 end
 
-ourBit32.band = bitAnd
-ourBit32.bor = bitOr
-ourBit32.bxor = bitXor
-ourBit32.lshift = bitShl
-ourBit32.rshift = bitShr
+local function fallback_bitconv(na, nb, f)
+	-- Fixup negative values before beginning, just in case
+	while na < 0 do
+		na = na + 0x100000000
+	end
+	while nb < 0 do
+		nb = nb + 0x100000000
+	end
+	na = checkint32(na)
+	nb = checkint32(nb)
+	local r = 0
+	local p = 1
+	for i = 1, 32 do
+		local pa = na * 0.5
+		local pb = nb * 0.5
+		na = mfloor(pa)
+		nb = mfloor(pb)
+		if f(pa ~= na, pb ~= nb) then
+			r = r + p
+		end
+		p = p * 2
+	end
+	return r
+end
 
-return ourBit32
+-- NOT
+function fallback.bnot(x)
+	return (-1 - x) % 0x100000000
+end
+
+-- AND
+local fb_band_r = function(a, b) return a and b end
+function fallback.band(a, b)
+	-- This is often used where the situation warrants a reconvert back to bit32.
+	-- So, don't assume it will receive sane input.
+
+	-- However, there are a lot of cases where the "convert to bit32" behavior is used.
+	-- Which are currently rather slow in the "no need to convert" case.
+	-- These neatly cover a good portion of these "there was no need to do this" cases,
+	--  speeds things up enormously.
+
+	if (b == 0xFFFFFFFF) and (a >= 0) and (a <= 0xFFFFFFFF) then return mfloor(a) end
+	if (a == 0xFFFFFFFF) and (b >= 0) and (b <= 0xFFFFFFFF) then return mfloor(b) end
+	if (b == 0xFFFFFFFF) and (a < 0) then
+		a = mfloor(0x100000000 + a)
+		if (a >= 0) and (a <= 0xFFFFFFFF) then return a end
+	end
+	if (a == 0xFFFFFFFF) and (b < 0) then
+		b = mfloor(0x100000000 + b)
+		if (b >= 0) and (b <= 0xFFFFFFFF) then return b end
+	end
+
+	return fallback_bitconv(a, b, fb_band_r)
+end
+
+-- OR
+local fb_bor_r = function(a, b) return a or b end
+function fallback.bor(a, b)
+	return fallback_bitconv(a, b, fb_bor_r)
+end
+
+-- XOR
+local fb_bxor_r = function(a, b) return (a or b) and (not (a and b)) end
+function fallback.bxor(a, b)
+	return fallback_bitconv(a, b, fb_bxor_r)
+end
+
+-- lshift
+function fallback.lshift(v, s)
+	if (v < 0) or (s < 0) then error("bad shift") end
+	if s > 31 then return 0 end
+	return mfloor(checkint32(v) * 2^s) % 0x100000000
+end
+
+-- rshift
+function fallback.rshift(v, s)
+	if (v < 0) or (s < 0) then error("bad shift") end
+	return mfloor(checkint32(v) / 2^s) % 0x100000000
+end
+
+-- arshift
+function fallback.arshift(v, s)
+	if s > 31 then return 0xFFFFFFFF end -- I /think/ that's correct.
+	v = checkint32(v)
+	if s <= 0 then return (x * 2^(-s)) % 0x100000000 end
+	if v < 0x80000000 then return mfloor(v / 2^s) % 0x100000000 end
+	return mfloor(v / 2^s) + (0x100000000 - 2^(32 - s))
+end
+
+-- Fixups!
+local function fix_negval(i)
+	if not i then return nil end
+	while i < 0 do
+		i = i + 0x100000000
+	end
+	return i
+end
+local function fix_negvalwrap(f)
+	return function(a, b)
+		return fix_negval(f(fix_negval(a), fix_negval(b)))
+	end
+end
+
+local function fixupall_signed(bl)
+	if bl.band(-1, -2) == -2 then
+		debug("bitops: Logic functions are SIGNED (not unsigned) 32-bit. Really. Most likely LuaJIT. Patching.")
+		local newbl = {}
+		for name, fn in pairs(bl) do
+			newbl[name] = fix_negvalwrap(fn)
+		end
+		return newbl
+	end
+	return bl
+end
+
+local function fixup_lshift(lshift)
+	local nlshift = lshift
+	if lshift(0x80000000, 1) == 0x100000000 then
+		debug("bitops: lshift can return <32 bits, applied workaround.")
+		nlshift = function(v, s)
+			return checkint32(lshift(v, s))
+		end
+	end
+	if lshift(1, 32) == 1 then
+		debug("bitops: lshift wraps at 32")
+		return function(v, s)
+			if s > 31 then return 0 end
+			return nlshift(v, s)
+		end
+	end
+	return nlshift
+end
+
+local function fixup_rshift(rshift)
+	local nrshift = rshift
+	if rshift(1, 32) == 1 then
+		debug("bitops: rshift wraps at 32")
+		nrshift = function(v, s)
+			if s > 31 then return 0 end
+			return rshift(v, s)
+		end
+	end
+	if rshift(0x80000000, 24) ~= 128 then
+		debug("bitops: rshift was arithmetic, this is really bad. Still, this is known now - Speed gains can still be gotten.")
+		return function(v, s)
+			return bitlib.band(nrshift(v, s), nrshift(0xFFFFFFFF, s))
+		end
+	end
+	return nrshift
+end
+
+-- actual bit op assembly
+local bit32 = {} --get_bit32()
+local ljbit = bit and fixupall_signed(bit) or {}
+
+bitlib = bit_select({
+	[{'bnot', 0xFFFFFFFA}] = {bit32.bnot, ljbit.bnot, bit_l52('~', true), fallback.bnot},
+	[{'band', 4}] = {bit32.band, ljbit.band, bit_l52('&'), fallback.band},
+	[{'bor', 5}] = {bit32.bor, ljbit.bor, bit_l52('|'), fallback.bor},
+	[{'bxor', 1}] = {bit32.bxor, ljbit.bxor, bit_l52('~'), fallback.bxor},
+	[{'lshift', 80, fixup_lshift}] = {bit32.lshift, ljbit.lshift, bit_l52('<<'), fallback.lshift},
+	[{'rshift', 0, fixup_rshift}] = {bit32.rshift, ljbit.rshift, bit_l52('>>'), fallback.rshift},
+	[{'arshift', 0}] = {bit32.arshift, ljbit.arshift, fallback.arshift},
+})
+
+return bitlib
