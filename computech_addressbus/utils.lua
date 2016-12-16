@@ -3,13 +3,15 @@ local tilebox = {
 	type = "fixed",
 	fixed = {{-0.5, -0.5, -0.5, 0.5, -0.3, 0.5}},
 }
+
+local function ci(pos)
+	return pos.x .. ":" .. pos.y .. ":" .. pos.z
+end
+
 local function register_ram(kb)
 	local bytes = kb * 1024
 	local cache = {}
 	local wcache = {}
-	local function ci(pos)
-		return pos.x .. ":" .. pos.y .. ":" .. pos.z
-	end
 	local function read_ram(pos, addr)
 		if addr >= bytes then
 			return 0xFF
@@ -251,12 +253,28 @@ minetest.register_node("computech_addressbus:1wr", {
 	}
 })
 
+-- The following caches should be completely wiped when any component flushes:
+-- This direction cache is used by all components for directions.
+local direction_cache = {}
+-- This MCU extent cache is used by MCUs for the sideport extents.
+local mcu_extent_cache = {}
+local function flush_caches()
+	direction_cache = {}
+	mcu_extent_cache = {}
+end
+
 -- For 3-way components, looking from the sideport:
 -- 1 is right, 2 is sideport, 3 is left.
 -- For 2-way components, same but without 2.
 local function find_direction(pos, dir)
-	local n = minetest.get_node(pos)
-	if not n.param2 then return nil end
+	local cin = ci(pos)
+	local dc = direction_cache[cin]
+	if not dc then
+		local n = minetest.get_node(pos)
+		if not n.param2 then return nil end
+		dc = n.param2
+		direction_cache[cin] = dc
+	end
 	-- presumably, 0 is "front". This has backwards mapping and a forward AB direction map.
 	local mapping = {
 		"000010",
@@ -264,7 +282,8 @@ local function find_direction(pos, dir)
 		"000001",
 		"010000",
 	}
-	return bit32.band(dir - n.param2, 3), mapping[((dir + n.param2) % 4) + 1]
+	local a, b = bit32.band(dir - dc, 3), mapping[((dir + dc) % 4) + 1]
+	return a, b
 end
 
 local function mcu_get_extent(pos, sideport)
@@ -285,18 +304,24 @@ local function mcu_get_extent(pos, sideport)
 	return ext
 end
 
-
 local function mcu_forwarder(pos, msg, dir)
 	if find_direction(pos, dir) == 3 then
-		local a = mcu_get_extent(pos, true)
+		-- Caching stuff because this is critical code.
+		local cin = ci(pos)
+		local a = mcu_extent_cache[cin]
+		if not a then
+			a = mcu_get_extent(pos, true)
+			mcu_extent_cache[cin] = a
+		end
+		local addr, val = (table.unpack or unpack)(msg.params)
 		-- Re-package the message, and re-send.
 		-- The depth limit should catch nasty cases.
-		local newmsg = addressbus.wrap_message(msg.id, {msg.params[1], msg.params[2]}, msg.respond)
 		local portdir = 2
-		if msg.params[1] >= a then
-			newmsg.params[1] = bit32.band(msg.params[1] - a, 0xFFFFFFFF)
+		if addr >= a then
+			addr = bit32.band(addr - a, 0xFFFFFFFF)
 			portdir = 1
 		end
+		local newmsg = addressbus.wrap_message(msg.id, {addr, val}, msg.respond)
 		local _, port = find_direction(pos, portdir)
 		addressbus.send_all(pos, newmsg, port)
 	end
@@ -330,6 +355,10 @@ minetest.register_node("computech_addressbus:mcu", {
 				local _, flushB = find_direction(pos, 2)
 				addressbus.send_all(pos, msg, flushA)
 				addressbus.send_all(pos, msg, flushB)
+				-- This flushes ALL caches, it's intentional:
+				-- since any cache that doesn't disappear
+				-- by the end of that CPU's tick is stale.
+				flush_caches()
 			end
 		end,
 		interrupt = function (pos, msg, dir)

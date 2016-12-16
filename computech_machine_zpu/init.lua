@@ -5,7 +5,7 @@ local bit32, addressbus = computech.bit32, computech.addressbus
 
 -- REB ROM
 local f = io.open(mp .. "/reb.bin", "rb")
-addressbus.roms["computech_addressbus:zpu:reb"] = f:read(0x80000)
+addressbus.roms["computech_machine_zpu:reb"] = f:read(0x80000)
 f:close()
 
 -- Load ZPU, zpu_emus and set bit library.
@@ -115,7 +115,9 @@ local function zputick(pos)
 	globalZPU.rSP = meta:get_int("sp")
 	globalZPU.pos = pos
 	globalZPU.fLastIM = meta:get_int("im") ~= 0
-	for i = 1, zpu_clock do
+	local endclock = os.clock() + 0.025
+	local left = zpu_clock
+	while (os.clock() < endclock) and (left > 0) do
 		local disasm = globalZPU:run()
 		if not disasm then
 			-- Error occurred, instant reboot.
@@ -125,6 +127,7 @@ local function zputick(pos)
 			minetest.set_node(pos, {name = "air"})
 			return
 		end
+		left = left - 1
 	end
 	local imr = 0
 	if globalZPU.fLastIM then imr = 1 end
