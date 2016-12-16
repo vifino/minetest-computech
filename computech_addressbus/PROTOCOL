@@ -21,4 +21,6 @@ Messages are:
               If the user wants to actually use interrupts,
                an interrupt helper should be in place
                to allow proper queue semantics. (Of course, for a custom-built OS and system, anything can be used.)
- 
+NOTE: There are some messages, beginning with internal_cable,
+       which bypass the cable cache.
+      These are solely used in the maintenance of the cable cache.

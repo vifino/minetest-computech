@@ -1,7 +1,7 @@
 local zpu_rate = 0.02
 local zpu_clock = 25
 local mp = minetest.get_modpath("computech_machine_zpu")
-local bit32, addressbus = computech.bit32, computech.addressbus
+local bit32, addressbus, bettertimers = computech.bit32, computech.addressbus, computech.bettertimers
 
 -- REB ROM
 local f = io.open(mp .. "/reb.bin", "rb")
@@ -10,10 +10,8 @@ f:close()
 
 -- Load ZPU, zpu_emus and set bit library.
 local zpu = dofile(mp .. "/zpu.lua")
-zpu.set_bit32(computech.bit32)
+zpu.set_bit32(bit32)
 zpu:apply(dofile(mp .. "/zpu_emus.lua"))
-
-local bit32, bettertimers = computech.bit32, computech.bettertimers
 
 local console_lines = 6
 

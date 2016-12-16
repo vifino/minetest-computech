@@ -324,6 +324,11 @@ local function mcu_forwarder(pos, msg, dir)
 		local newmsg = addressbus.wrap_message(msg.id, {addr, val}, msg.respond)
 		local _, port = find_direction(pos, portdir)
 		addressbus.send_all(pos, newmsg, port)
+	else
+		-- Messages CAN be forwarded backwards if they're in the 0x80000000 range.
+		-- This allows IO devices to perform DMA,
+		--  since the IO divider would swap things around.
+		
 	end
 end
 minetest.register_node("computech_addressbus:mcu", {
