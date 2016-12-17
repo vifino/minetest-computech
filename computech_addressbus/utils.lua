@@ -316,6 +316,7 @@ local function mcu_forwarder(pos, msg, dir)
 		local addr, val = (table.unpack or unpack)(msg.params)
 		-- Re-package the message, and re-send.
 		-- The depth limit should catch nasty cases.
+		-- Notably, doing things this way ensures that
 		local portdir = 2
 		if addr >= a then
 			addr = bit32.band(addr - a, 0xFFFFFFFF)
@@ -328,7 +329,11 @@ local function mcu_forwarder(pos, msg, dir)
 		-- Messages CAN be forwarded backwards if they're in the 0x80000000 range.
 		-- This allows IO devices to perform DMA,
 		--  since the IO divider would swap things around.
-		
+		if msg.params[1] >= 0x80000000 then
+			local _, port = find_direction(pos, 3)
+			-- Forward the original message to the CPU bus.
+			addressbus.send_all(pos, msg, port)
+		end
 	end
 end
 minetest.register_node("computech_addressbus:mcu", {
@@ -373,6 +378,39 @@ minetest.register_node("computech_addressbus:mcu", {
 				local _, cpudir = find_direction(pos, 3)
 				addressbus.send_all(pos, msg, cpudir)
 			end
+		end
+	}
+})
+
+local function bridge_forwarder(pos, msg, dir)
+	local mapping = {
+		"110001",
+		"010011",
+		"110010",
+		"100011",
+	}
+end
+minetest.register_node("computech_addressbus:iobridge", {
+	description = "Computech IO Bridge Unit <TODO. NOP>",
+	tiles = {"computech_addressbus_iobridge_top.png", "computech_addressbus_iobridge_top.png",
+		"computech_addressbus_port.png", "computech_addressbus_port.png",
+		"computech_addressbus_block.png", "computech_addressbus_port.png"},
+	paramtype = "light",
+	drawtype = "nodebox",
+	node_box = tilebox,
+	paramtype2 = "facedir",
+	groups = {dig_immediate = 2},
+	computech_addressbus = {
+		-- These are basically the same
+		read32 = bridge_forwarder,
+		write32 = bridge_forwarder,
+		extent = function (pos, msg, dir)
+		end,
+		flush = function (pos, msg, dir)
+			addressbus.send_all(pos, msg)
+		end,
+		interrupt = function (pos, msg, dir)
+			addressbus.send_all(pos, msg)
 		end
 	}
 })
