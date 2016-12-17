@@ -1,5 +1,5 @@
-local zpu_rate = 0.02
-local zpu_clock = 100
+local zpu_rate = 0.125
+local zpu_clock = 100 -- Note! This is divided by the total amount of operating ZPUs.
 local mp = minetest.get_modpath("computech_machine_zpu")
 local bit32, addressbus, bettertimers = computech.bit32, computech.addressbus, computech.bettertimers
 
@@ -111,7 +111,7 @@ end
 
 local globalZPU = zpu.new(zpu_get32, zpu_set32)
 
-local function zputick(pos)
+local function zputick(pos, operating)
 	update_console = false
 	local meta = minetest.get_meta(pos)
 	globalZPU.rIP = bit32.band(meta:get_int("ip"), 0xFFFFFFFF)
@@ -125,13 +125,12 @@ local function zputick(pos)
 			--  which means if the timeslice continues without the interrupt occurring,
 			--  then it may well return to sleep before we have a chance.
 			-- So do this now.
-			print("interrupt")
 			globalZPU:op_emulate(1)
 			meta:set_int("il", 0)
 		end
 	end
 	local frozen = false
-	local left = 50
+	local left = math.ceil(zpu_clock / operating)
 	while left > 0 and (not frozen) do
 		local disasm, ipb = globalZPU:run()
 		if not disasm then

@@ -31,7 +31,19 @@ function bettertimers.create_on_timer(nt, func, time)
 		return true
 	end
 end
+local lastTimeframe = nil
 minetest.register_globalstep(function(dt)
+	local nextTimeframe = minetest.get_us_time() / 1000000
+	if not lastTimeframe then
+		lastTimeframe = nextTimeframe
+	end
+	dt = nextTimeframe - lastTimeframe
+	lastTimeframe = nextTimeframe
+	local p = {}
+	for k, v in pairs(fm_registry) do
+		local t = p[v[2]] or 0
+		p[v[2]] = t + 1
+	end
 	for k, v in pairs(fm_registry) do
 		local n = minetest.get_node(v[1])
 		if (not n) or (n.name ~= v[2]) then
@@ -40,7 +52,11 @@ minetest.register_globalstep(function(dt)
 			v[5] = v[5] + dt
 			if v[5] > v[4] then
 				v[5] = v[5] - v[4]
-				v[3](v[1])
+				if v[5] > v[4] then
+					v[5] = 0
+					print("Warning: computech_base bettertimers hit two ticks in one step. Reduce system usage. " .. dt)
+				end
+				v[3](v[1], p[v[2]])
 			end
 		end
 	end

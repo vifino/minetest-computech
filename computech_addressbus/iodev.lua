@@ -245,7 +245,7 @@ local function dio_handler(pos, msg, dir)
 	end
 end
 minetest.register_node("computech_addressbus:digiline_io", {
-	description = "Computech Digiline IO Chip <KIND OF TESTED>",
+	description = "Computech Digiline IO Chip <MOSTLY TESTED>",
 	tiles = {"computech_addressbus_dio_top.png", "computech_addressbus_dio_top.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png"},
@@ -254,6 +254,7 @@ minetest.register_node("computech_addressbus:digiline_io", {
 	node_box = tilebox,
 	groups = {dig_immediate = 2},
 	on_construct = dio_reset,
+	on_punch = dio_reset,
 	on_timer = dio_send_buffers,
 	digiline = {
 		receptor = {},

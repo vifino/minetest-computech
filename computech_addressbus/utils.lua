@@ -183,18 +183,28 @@ minetest.register_node("computech_addressbus:inspector", {
 			local rom = addressbus.roms[flashitem]
 			if rom then
 				local romulen = math.ceil(rom:len() / 4)
+				local r = 0
 				for i = 0, romulen - 1 do
-					local a, b, c, d = rom:byte(1), rom:byte(2), rom:byte(3), rom:byte(4)
-					a = a or 0
-					b = b or 0
-					c = c or 0
-					d = d or 0
-					local addr = i * 4
-					local v = d + (c * 0x100) + (b * 0x10000) + (a * 0x1000000)
-					addressbus.send_all(pos, addressbus.wrap_message("write32", {addr, v}, function() end))
-					rom = rom:sub(5)
+					local lj = i
+					minetest.after(lj * 0.001, function ()
+						local addr = lj * 4
+						local a, b, c, d = rom:byte(addr + 1), rom:byte(addr + 2), rom:byte(addr + 3), rom:byte(addr + 4)
+						a = a or 0
+						b = b or 0
+						c = c or 0
+						d = d or 0
+						local v = d + (c * 0x100) + (b * 0x10000) + (a * 0x1000000)
+						addressbus.send_all(pos, addressbus.wrap_message("write32", {addr, v}, function() end))
+						r = r + 1
+						if r == romulen then
+							addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
+							update_inspector(pos, "flash OK")
+						else
+							update_inspector(pos, "flash " .. math.floor((r / romulen) * 100) .. "%")
+						end
+					end)
 				end
-				message = "flash OK"
+				message = "flash begun"
 			else
 				message = "invalid ROM"
 			end

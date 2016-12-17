@@ -88,8 +88,12 @@ for i = 0, console_lines do
 	if i == 0 then ip = "" end
 	local n = "computech_console:console" .. ip
 	console_mapping[i] = n
+	local g = {dig_immediate = 2}
+	if i ~= 0 then
+		g.not_in_creative_inventory = 1
+	end
 	minetest.register_node(n, {
-		groups = {dig_immediate = 2},
+		groups = g,
 		paramtype = "light",
 		paramtype2 = "facedir",
 		drop = "computech_console:console",
