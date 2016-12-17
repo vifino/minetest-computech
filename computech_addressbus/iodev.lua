@@ -47,17 +47,17 @@ local function dma_read(pos, address, len)
 				return data
 			end
 		end
-		target = bit.band(target + 4, 0xFFFFFFFF)
+		target = bit32.band(target + 4, 0xFFFFFFFF)
 	end
 	for i = 1, math.ceil(len / 4) do
 		local w = dma_rw(pos, target)
 		data = data .. table.concat({
-			string.char(bit.band(w, 0xFF000000) / 0x1000000),
-			string.char(bit.band(w, 0xFF0000) / 0x10000),
-			string.char(bit.band(w, 0xFF00) / 0x100),
-			string.char(bit.band(w, 0xFF))
+			string.char(bit32.band(math.floor(w / 0x1000000), 0xFF)),
+			string.char(bit32.band(math.floor(w / 0x10000), 0xFF)),
+			string.char(bit32.band(math.floor(w / 0x100), 0xFF)),
+			string.char(bit32.band(w, 0xFF))
         })
-		target = bit.band(target + 4, 0xFFFFFFFF)
+		target = bit32.band(target + 4, 0xFFFFFFFF)
 	end
 	return data:sub(1, len)
 end
@@ -73,19 +73,19 @@ local function dma_write(pos, address, data)
 				return
 			end
 		end
-		target = bit.band(target + 4, 0xFFFFFFFF)
+		target = bit32.band(target + 4, 0xFFFFFFFF)
 	end
-	local mclen = math.floor(len / 4)
+	local mclen = math.floor(data:len() / 4)
 	for i = 1, mclen do
 		local o = (i - 1) * 4
 		local a, b, c, d = data:byte(o + 1), data:byte(o + 2), data:byte(o + 3), data:byte(o + 4)
 		local r = (a * 0x1000000) + (b * 0x10000) + (c * 0x100) + d
-		dma_ww(pos, target + o, r)
+		dma_ww(pos, bit32.band(target + o, 0xFFFFFFFF), r)
 	end
 	data = data:sub((mclen * 4) + 1)
 	target = target + (mclen * 4)
 	for i = 1, data:len() do
-		dma_wb(pos, target + i, data:byte(i))
+		dma_wb(pos, bit32.band(target + (i - 1), 0xFFFFFFFF), data:byte(i))
 	end
 end
 
@@ -99,22 +99,36 @@ end
 --       Command 0: NOP.
 --       Command 1: Send a message over the Digiline bus.
 --       Command 2: Read a message on the Digiline bus.
---       Command 3: Confirm interrupt enable.
 -- 0x0F: Available messages counter.
--- If interrupts are enabled,
---  this device will fire an interrupt when a message is received,
+-- This device will fire an interrupt when a message is received,
 --  unless there is a message waiting.
 local function dio_send_buffers(pos)
+	local n = minetest.get_node(pos)
+	if not n then return false end
+	if n.name ~= "computech_addressbus:digiline_io" then
+		return false
+	end
 	local meta = minetest.get_meta(pos)
 	local buffer_count = meta:get_int("s_count")
 	for i = 1, buffer_count do
 		local c, d = meta:get_string("sc" .. i), meta:get_string("sd" .. i)
 		meta:set_string("sc" .. i, "")
 		meta:set_string("sd" .. i, "")
-		digiline:receptor_send(pos, digiline.rules.default, c, m)
+		digiline:receptor_send(pos, digiline.rules.default, c, d)
 	end
 	meta:set_int("s_count", 0)
 	return false -- stop timer
+end
+local function dio_wm(meta, bc)
+	if bc == 0 then
+		meta:set_string("infotext", "No messages.")
+		return
+	end
+	if bc == 1 then
+		meta:set_string("infotext", "Message available.")
+		return
+	end
+	meta:set_string("infotext", bc .. " waiting messages.")
 end
 
 local dio_handlers = {}
@@ -143,14 +157,14 @@ end
 dio_handlers[12] = function (pos, data)
 	local meta = minetest.get_meta(pos)
 	if data then
-		meta:set_int("wr", data)
 		-- They have access to *system RAM* and yet can't talk to each other.
 		-- That's the way things go these days.
-		local ac = bit32.bxor(0x80000000, bit32.band(meta:get_int("cba"), 0xFFFFFFFF))
-		local ad = bit32.bxor(0x80000000, bit32.band(meta:get_int("dba"), 0xFFFFFFFF))
-		local lc = bit32.band(data, 0xFF000000) / 0x1000000
-		local ld = bit32.band(data, 0xFF0000) / 0x10000
-		local cmd = bit32.band(data, 0xFF00) / 0x100
+		local ac = bit32.bxor(0x80000000, meta:get_int("cba"))
+		local ad = bit32.bxor(0x80000000, meta:get_int("dba"))
+		local lc = math.floor(bit32.band(data, 0xFF000000) / 0x1000000)
+		local ld = math.floor(bit32.band(data, 0xFF0000) / 0x10000)
+		local cmd = math.floor(bit32.band(data, 0xFF00) / 0x100)
+		--print("DIO Received command " .. string.format("%08x", data))
 		if cmd == 1 then
 			-- Write
 			local buffer_count = meta:get_int("s_count") + 1
@@ -170,7 +184,12 @@ dio_handlers[12] = function (pos, data)
 		if cmd == 2 then
 			-- Read
 			local buffer_count = meta:get_int("r_count", data) - 1
-			local c, d = meta:get_string("rc1"), meta:get_string("rd1")
+			local c, d = meta:get_string("rc1"):sub(1, lc), meta:get_string("rd1"):sub(1, ld)
+			if buffer_count == -1 then
+				buffer_count = 0
+				c = ""
+				d = ""
+			end
 			
 			for i = 1, buffer_count do
 				meta:set_string("rc" .. i, meta:get_string("rc" .. (i + 1)))
@@ -179,14 +198,14 @@ dio_handlers[12] = function (pos, data)
 			meta:set_string("rc" .. (buffer_count + 1), "")
 			meta:set_string("rd" .. (buffer_count + 1), "")
 			meta:set_int("r_count", buffer_count)
-			dma_write(pos, ac, d:sub(1, lc))
-			dma_write(pos, ad, d:sub(1, ld))
+			data = (c:len() * 0x1000000) + (d:len() * 0x10000)
+			dma_write(pos, ac, c)
+			dma_write(pos, ad, d)
+			dio_wm(meta, buffer_count)
 		end
-		if cmd == 3 then
-			-- Enable interrupts
-		end
+		meta:set_int("wr", data)
 	else
-		return bit32.band(meta:get_int("dba"), 0xFFFF0000) + math.min(meta:get_int("r_count"), 255)
+		return bit32.band(meta:get_int("wr"), 0xFFFF0000) + math.min(meta:get_int("r_count"), 255)
 	end
 end
 local function dio_reset(pos)
@@ -196,30 +215,44 @@ local function dio_reset(pos)
 	meta:set_int("cba", 0)
 	meta:set_int("dba", 0)
 	meta:set_int("wr", 0)
+	dio_wm(meta, 0)
 end
 local function dio_digiline(pos, node, channel, msg)
 	if channel then
+		local meta = minetest.get_meta(pos)
 		local buffer_count = meta:get_int("r_count") + 1
-		meta:set_string("rc" .. buffer_count, tostring(channel))
-		meta:set_string("rd" .. buffer_count, tostring(msg))
+		meta:set_string("rc" .. buffer_count, tostring(channel):sub(1, 255))
+		meta:set_string("rd" .. buffer_count, tostring(msg):sub(1, 255))
 		meta:set_int("r_count", buffer_count)
+		dio_wm(meta, buffer_count)
+		-- If nothing's currently waiting, cause an interrupt.
+		if buffer_count == 1 then
+			local newmsg = addressbus.wrap_message("interrupt", {0}, function () end)
+			addressbus.send_all(pos, newmsg)
+		end
 	end
 end
 local function dio_handler(pos, msg, dir)
-	local addr, data = math.floor(msg.params[1] / 4), msg.params[2]
+	local addr, data = msg.params[1], msg.params[2]
+	if msg.id == "read32" then
+		data = nil
+		--print("DIO Rd." .. addr .. ",")
+		--else
+		--print("DIO Wr." .. addr .. "," .. data)
+	end
 	if dio_handlers[addr] then
 		msg.respond(dio_handlers[addr](pos, data))
 	end
 end
 minetest.register_node("computech_addressbus:digiline_io", {
-	description = "Computech Digiline IO Chip <UNTESTED>",
+	description = "Computech Digiline IO Chip <KIND OF TESTED>",
 	tiles = {"computech_addressbus_dio_top.png", "computech_addressbus_dio_top.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png"},
 	paramtype = "light",
 	drawtype = "nodebox",
 	node_box = tilebox,
-	groups = {dig_immediate = 2, computech_addressbus_cable = 1},
+	groups = {dig_immediate = 2},
 	on_construct = dio_reset,
 	on_timer = dio_send_buffers,
 	digiline = {

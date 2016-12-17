@@ -37,7 +37,10 @@ function addressbus.send(pos, msg, dir)
 	local node = minetest.get_node(pos)
 	local nodedef = minetest.registered_nodes[node.name]
 	if nodedef then
-		msg.places[str] = {opos, not nodedef.groups.computech_addressbus_cable, dir}
+		-- Some devices are cables *and* devices.
+		-- Luckily, this isn't a major issue as the msg.places mechanism should mostly keep things working,
+		-- and these "semi-devices" don't count towards the depth limit since they're all on the same bus.
+		msg.places[str] = {opos, not nodedef.groups.computech_addressbus_cable, dir, not nodedef.computech_addressbus}
 		if nodedef.groups.computech_addressbus_cable then
 			local cache = cableCache[str]
 			if not cache then
@@ -63,7 +66,7 @@ function addressbus.send(pos, msg, dir)
 			end
 			if cache then
 				for k, v in pairs(cache) do
-					if v[2] then
+					if v[2] or (not v[4]) then
 						addressbus.send(v[1], msg, v[3])
 					end
 				end

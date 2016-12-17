@@ -1,12 +1,33 @@
 -- A Digilines console!
 
 local console_lines = 6
-
-local function console_gui(pos)
+local console_mapping = {}
+local function console_gui(pos, first)
 	local meta = minetest.get_meta(pos)
 	local formspec = "size[8," .. ((console_lines / 2) + 1) .. "]"
+	local console = {}
+	local firstline = console_lines + 1
 	for l = 1, console_lines do
-		formspec = formspec .. "label[0, " .. ((l - 1) / 2) .. ";" .. minetest.formspec_escape(meta:get_string("c" .. l)) ..  "]"
+		console[l] = meta:get_string("c" .. l) or ""
+		if console[l]:len() > 0 then
+			firstline = math.min(firstline, l)
+		end
+	end
+	for l = 1, console_lines do
+		local n = minetest.get_node(pos)
+		if n and (not first) then
+			local maxlines = (console_lines + 1) - firstline
+			local wanted = console_mapping[maxlines]
+			if wanted then
+				if n.name ~= wanted then
+					minetest.set_node(pos, {name = wanted, param2 = n.param2})
+				end
+			else
+				print("computech_console: edge case!")
+			end
+		end
+		formspec = formspec .. "label[0, " .. ((l - 1) / 2) .. ";" .. minetest.formspec_escape(console[l]) ..  "]"
+		meta:set_string("c" .. l, console[l])
 	end
 	local hd = ((console_lines / 2) + 0.5)
 	formspec = formspec .. "button[6," .. hd .. ";2,1;submit;Send]"
@@ -44,34 +65,47 @@ local function console_rfields(pos, _, fields, sender)
 	console_gui(pos)
 end
 
-local function console_reset(pos)
+local function console_reset(pos, first)
 	local meta = minetest.get_meta(pos)
 	for l = 1, console_lines do
 		meta:set_string("c" .. l, "")
 	end
-	console_gui(pos)
+	console_gui(pos, first)
 end
 
 local function console_digiline(pos, node, channel, msg)
 	if channel == "console" then
 		console_append(pos, tostring(msg))
+		console_gui(pos)
 	end
 end
 
-minetest.register_node("computech_console:console", {
-	groups = {dig_immediate = 2},
-	param2 = "facedir",
-	tiles = {"computech_console_block.png", "computech_console_block.png",
-		"computech_console_ridge.png", "computech_console_ridge.png",
-		"computech_console_ridge.png", "computech_console_screen.png"},
-	description = "Digilines Console",
-	on_construct = console_reset,
-	on_punch = console_reset,
-	on_receive_fields = console_rfields,
-	digiline = {
-		receptor = {},
-		effector = {
-			action = console_digiline
+for i = 0, console_lines do
+	local scrtexlen, scrtexpos = 8, 4
+	local point = ((i / console_lines) * (scrtexlen / 16)) + (scrtexpos / 16)
+	local screen = "computech_console_screen.png^[lowpart:" .. math.floor(point * 100) .. ":computech_console_screen_ovl.png"
+	local ip = tostring(i)
+	if i == 0 then ip = "" end
+	local n = "computech_console:console" .. ip
+	console_mapping[i] = n
+	minetest.register_node(n, {
+		groups = {dig_immediate = 2},
+		paramtype = "light",
+		paramtype2 = "facedir",
+		drop = "computech_console:console",
+		light_source = math.floor((i / console_lines) * 10),
+		tiles = {"computech_console_block.png", "computech_console_block.png",
+			"computech_console_ridge.png", "computech_console_ridge.png",
+			"computech_console_ridge.png", screen},
+		description = "Digilines Console",
+		on_construct = function (pos) console_reset(pos, true) end,
+		on_punch = function (pos) console_reset(pos, false) end,
+		on_receive_fields = console_rfields,
+		digiline = {
+			receptor = {},
+			effector = {
+				action = console_digiline
+			},
 		},
-	},
-})
+	})
+end

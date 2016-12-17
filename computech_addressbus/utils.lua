@@ -211,7 +211,11 @@ minetest.register_node("computech_addressbus:inspector", {
 		update_inspector(pos, message)
 		addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
 	end,
-	computech_addressbus = {}
+	computech_addressbus = {
+		interrupt = function (pos, msg, dir)
+			update_inspector(pos, "interrupt")
+		end
+	}
 })
 
 -- communications helper!
@@ -267,6 +271,7 @@ end
 -- 1 is right, 2 is sideport, 3 is left.
 -- For 2-way components, same but without 2.
 local function find_direction(pos, dir)
+	if dir > 3 then return nil, nil end
 	local cin = ci(pos)
 	local dc = direction_cache[cin]
 	if not dc then
@@ -373,10 +378,15 @@ minetest.register_node("computech_addressbus:mcu", {
 		end,
 		interrupt = function (pos, msg, dir)
 			-- If interrupt is CPU-side, ignore.
-			-- Otherwise, it must be forwarded (as-is for simplicity)
-			if find_direction(pos, dir) ~= 3 then
+			-- Otherwise, it must be forwarded, and if it's from the next peripheral, the PID must be incremented.
+			local nd = find_direction(pos, dir)
+			if nd ~= 3 then
+				local newmsg = msg
+				if nd == 1 then
+					newmsg = addressbus.wrap_message(msg.id, {msg.params[1] + 1}, msg.respond)
+				end
 				local _, cpudir = find_direction(pos, 3)
-				addressbus.send_all(pos, msg, cpudir)
+				addressbus.send_all(pos, newmsg, cpudir)
 			end
 		end
 	}
@@ -389,16 +399,22 @@ local function bridge_forwarder(pos, msg, dir)
 		"110010",
 		"100011",
 	}
+	local addr, val = (table.unpack or unpack)(msg.params)
+	addr = bit32.bxor(addr, 0x80000000)
+	local newmsg = addressbus.wrap_message(msg.id, {addr, val}, msg.respond)
+	local m = mapping[dir + 1]
+	if m then
+		addressbus.send_all(pos, newmsg, m)
+	end
 end
 minetest.register_node("computech_addressbus:iobridge", {
-	description = "Computech IO Bridge Unit <TODO. NOP>",
+	description = "Computech IO Bridge Unit",
 	tiles = {"computech_addressbus_iobridge_top.png", "computech_addressbus_iobridge_top.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png",
 		"computech_addressbus_block.png", "computech_addressbus_port.png"},
 	paramtype = "light",
 	drawtype = "nodebox",
 	node_box = tilebox,
-	paramtype2 = "facedir",
 	groups = {dig_immediate = 2},
 	computech_addressbus = {
 		-- These are basically the same

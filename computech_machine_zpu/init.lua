@@ -1,12 +1,16 @@
 local zpu_rate = 0.02
-local zpu_clock = 25
+local zpu_clock = 100
 local mp = minetest.get_modpath("computech_machine_zpu")
 local bit32, addressbus, bettertimers = computech.bit32, computech.addressbus, computech.bettertimers
 
 -- REB ROM
-local f = io.open(mp .. "/reb.bin", "rb")
-addressbus.roms["computech_machine_zpu:reb"] = f:read(0x80000)
-f:close()
+local function getROM(file)
+	local f = io.open(mp .. "/" .. file .. ".bin", "rb")
+	local bin = f:read(0x80000)
+	f:close()
+	return bin
+end
+addressbus.roms["computech_machine_zpu:reb"] = getROM("reb")
 
 -- Load ZPU, zpu_emus and set bit library.
 local zpu = dofile(mp .. "/zpu.lua")
@@ -62,6 +66,7 @@ local function reset_zpu(pos)
 	meta:set_int("ip", 0)
 	meta:set_int("sp", bit32.band(memsz, 0xFFFFFFFC))
 	meta:set_int("im", 0)
+	meta:set_int("il", 0)
 	meta:set_string("cinbuf", "")
 	for l = 1, console_lines do
 		meta:set_string("c" .. l, "")
@@ -109,21 +114,46 @@ local globalZPU = zpu.new(zpu_get32, zpu_set32)
 local function zputick(pos)
 	update_console = false
 	local meta = minetest.get_meta(pos)
-	globalZPU.rIP = meta:get_int("ip")
-	globalZPU.rSP = meta:get_int("sp")
-	globalZPU.pos = pos
+	globalZPU.rIP = bit32.band(meta:get_int("ip"), 0xFFFFFFFF)
+	globalZPU.rSP = bit32.band(meta:get_int("sp"), 0xFFFFFFFF)
+	globalZPU.pos = pos -- Metadata used internally.
 	globalZPU.fLastIM = meta:get_int("im") ~= 0
-	local endclock = os.clock() + 0.025
-	local left = zpu_clock
-	while (os.clock() < endclock) and (left > 0) do
-		local disasm = globalZPU:run()
+	if meta:get_int("il") ~= 0 then
+		if not globalZPU.fLastIM then
+			-- Interrupt.
+			-- At this point, we could have been just woken from sleep,
+			--  which means if the timeslice continues without the interrupt occurring,
+			--  then it may well return to sleep before we have a chance.
+			-- So do this now.
+			print("interrupt")
+			globalZPU:op_emulate(1)
+			meta:set_int("il", 0)
+		end
+	end
+	local frozen = false
+	local left = 50
+	while left > 0 and (not frozen) do
+		local disasm, ipb = globalZPU:run()
 		if not disasm then
 			-- Error occurred, instant reboot.
 			-- (To fix things, remove the ZPU first!)
 			--print("Zpu Error")
 			--reset_zpu(pos)
-			minetest.set_node(pos, {name = "air"})
-			return
+			if ipb == 0 then
+				globalZPU.rIP = bit32.band(globalZPU.rIP + 1, 0xFFFFFFFF)
+				globalZPU.fLastIM = false
+				if meta:get_int("il") == 0 then
+					minetest.set_node(pos, {name = "computech_machine_zpu:zpu_slp"})
+					-- zpu_slp doesn't have "il" flag.
+				end
+				frozen = true
+				update_console = true
+			else
+				minetest.set_node(pos, {name = "computech_machine_zpu:zpu_err"})
+				meta:set_string("infotext", string.format("Bad op %02x at IP: %08x", ipb, globalZPU.rIP))
+				addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
+				return
+			end
 		end
 		left = left - 1
 	end
@@ -138,14 +168,72 @@ local function zputick(pos)
 	end
 end
 
+local function start_zpu(pos)
+	minetest.set_node(pos, {name = "computech_machine_zpu:zpu"})
+end
+local function stop_zpu(pos)
+	minetest.set_node(pos, {name = "computech_machine_zpu:zpu_off"})
+end
+
+local function abus_interrupt(pos, slp)
+	local meta = minetest.get_meta(pos)
+	if slp then
+		local rIP = bit32.band(meta:get_int("ip"), 0xFFFFFFFF)
+		local rSP = bit32.band(meta:get_int("sp"), 0xFFFFFFFF)
+		local fLastIM = meta:get_int("im")
+		minetest.set_node(pos, {name = "computech_machine_zpu:zpu"})
+		meta:set_int("ip", rIP)
+		meta:set_int("sp", rSP)
+		meta:set_int("im", fLastIM)
+	end
+	-- The ZPU is definitely active now, set the interrupt latch.
+	meta:set_int("il", 1)
+end
+
 -- Simple enough.
 
 minetest.register_node("computech_machine_zpu:zpu", {
-	groups = {dig_immediate = 2, computech_addressbus_cable = 1},
-	tiles = {"computech_machine_zpu.png"},
-	description = "ZPU",
+	groups = {dig_immediate = 2, computech_addressbus_cable = 1, not_in_creative_inventory = 1},
+	tiles = {"computech_base_cpu.png^computech_base_cpu_on.png^computech_base_cpu_ac.png"},
+	drop = "computech_machine_zpu:zpu_off",
+	description = "ZPU<on",
 	on_construct = reset_zpu,
-	on_punch = reset_zpu,
+	on_punch = stop_zpu,
 	on_receive_fields = rfields_zpu,
-	on_timer = bettertimers.create_on_timer("computech_machine_zpu:zpu", zputick, zpu_rate)
+	on_timer = bettertimers.create_on_timer("computech_machine_zpu:zpu", zputick, zpu_rate),
+	computech_addressbus = {
+		interrupt = function (pos, msg, dir)
+			abus_interrupt(pos, false)
+		end
+	}
 })
+minetest.register_node("computech_machine_zpu:zpu_slp", {
+	groups = {dig_immediate = 2, computech_addressbus_cable = 1, not_in_creative_inventory = 1},
+	tiles = {"computech_base_cpu.png^computech_base_cpu_on.png"},
+	drop = "computech_machine_zpu:zpu_off",
+	description = "ZPU<on<slp",
+	on_construct = reset_zpu,
+	on_punch = stop_zpu,
+	on_receive_fields = rfields_zpu,
+	computech_addressbus = {
+		interrupt = function (pos, msg, dir)
+			abus_interrupt(pos, true)
+		end
+	}
+})
+
+minetest.register_node("computech_machine_zpu:zpu_err", {
+	groups = {dig_immediate = 2, computech_addressbus_cable = 1, not_in_creative_inventory = 1},
+	tiles = {"computech_base_cpu.png^computech_base_cpu_on.png^computech_base_cpu_er.png"},
+	drop = "computech_machine_zpu:zpu_off",
+	description = "ZPU<error",
+	on_punch = stop_zpu,
+})
+
+minetest.register_node("computech_machine_zpu:zpu_off", {
+	groups = {dig_immediate = 2, computech_addressbus_cable = 1},
+	tiles = {"computech_base_cpu.png"},
+	description = "ZPU",
+	on_punch = start_zpu
+})
+
