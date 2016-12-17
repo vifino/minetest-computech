@@ -1,0 +1,3 @@
+Digilines Console peripheral.
+Well-designed. Produced in <INSERT COUNTRY>. Mahogany.
+The previous line is probably a complete lie.
