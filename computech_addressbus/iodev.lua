@@ -20,7 +20,11 @@ local function dma_rb(pos, address)
 	local target = bit32.band(address, 0xFFFFFFFC)
 	local remain = address - target
 	local w = dma_rw(pos, target)
-	return bit32.band(0xFF000000, bit32.lshift(w, remain * 8)) / 0x1000000
+	-- remain val->shift: 24, 16, 8, 0
+	local shift = 24 - (remain * 8)
+	--print("DMA_Rbw " .. string.format("address %x s%i", target, shift))
+	w = bit32.rshift(w, shift)
+	return bit32.band(0xFF, w)
 end
 local function dma_wb(pos, address, byte)
 	local target = bit32.band(address, 0xFFFFFFFC)
@@ -31,7 +35,8 @@ local function dma_wb(pos, address, byte)
 	local ormask = bit32.lshift(byte, 24 - (remain * 8))
 	mask = bit32.rshift(mask, remain * 8)
 	mask2 = bit32.bxor(0xFFFFFFFF, mask)
-	dma_ww(pos, address, bit32.bor(ormask, bit32.band(w, mask2)))
+	--print(string.format("DMA_WB%x %x %x > %x", mask, mask2, ormask, address))
+	dma_ww(pos, target, bit32.bor(ormask, bit32.band(w, mask2)))
 end
 
 local function dma_read(pos, address, len)
@@ -40,9 +45,8 @@ local function dma_read(pos, address, len)
 	local data = ""
 	if remain ~= 0 then
 		for i = remain, 3 do
-			if len > 0 then
-				data = data .. dma_rb(pos, target + i)
-				len = len - 1
+			if data:len() < len then
+				data = data .. string.char(dma_rb(pos, target + i))
 			else
 				return data
 			end
@@ -56,7 +60,7 @@ local function dma_read(pos, address, len)
 			string.char(bit32.band(math.floor(w / 0x10000), 0xFF)),
 			string.char(bit32.band(math.floor(w / 0x100), 0xFF)),
 			string.char(bit32.band(w, 0xFF))
-        })
+        	})
 		target = bit32.band(target + 4, 0xFFFFFFFF)
 	end
 	return data:sub(1, len)
@@ -80,7 +84,7 @@ local function dma_write(pos, address, data)
 		local o = (i - 1) * 4
 		local a, b, c, d = data:byte(o + 1), data:byte(o + 2), data:byte(o + 3), data:byte(o + 4)
 		local r = (a * 0x1000000) + (b * 0x10000) + (c * 0x100) + d
-		dma_ww(pos, bit32.band(target + o, 0xFFFFFFFF), r)
+		dma_ww(pos, bit32.band(target + o, 0xFFFFFFFF), math.floor(r))
 	end
 	data = data:sub((mclen * 4) + 1)
 	target = target + (mclen * 4)
@@ -164,7 +168,7 @@ dio_handlers[12] = function (pos, data)
 		local lc = math.floor(bit32.band(data, 0xFF000000) / 0x1000000)
 		local ld = math.floor(bit32.band(data, 0xFF0000) / 0x10000)
 		local cmd = math.floor(bit32.band(data, 0xFF00) / 0x100)
-		--print("DIO Received command " .. string.format("%08x", data))
+		print("DIO Received command " .. string.format("%08x", data))
 		if cmd == 1 then
 			-- Write
 			local buffer_count = meta:get_int("s_count") + 1

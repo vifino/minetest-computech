@@ -40,7 +40,7 @@ function addressbus.send(pos, msg, dir)
 		-- Some devices are cables *and* devices.
 		-- Luckily, this isn't a major issue as the msg.places mechanism should mostly keep things working,
 		-- and these "semi-devices" don't count towards the depth limit since they're all on the same bus.
-		msg.places[str] = {opos, not nodedef.groups.computech_addressbus_cable, dir, not nodedef.computech_addressbus}
+		msg.places[str] = {opos, not not nodedef.groups.computech_addressbus_cable, dir, not not nodedef.computech_addressbus}
 		if nodedef.groups.computech_addressbus_cable then
 			local cache = cableCache[str]
 			if not cache then
@@ -56,7 +56,7 @@ function addressbus.send(pos, msg, dir)
 					local msg = addressbus.wrap_message("internal_cable_detect_" .. math.random(), nil, function () end)
 					addressbus.send(pos, msg, {x = 0, y = 0, z = 0})
 					for k, v in pairs(msg.places) do
-						if not v[2] then
+						if v[2] then
 							-- Only cables get the cablecache
 							cableCache[k] = msg.places
 						end
@@ -66,8 +66,11 @@ function addressbus.send(pos, msg, dir)
 			end
 			if cache then
 				for k, v in pairs(cache) do
-					if v[2] or (not v[4]) then
+					if (not v[2]) or v[4] then
+						--print("computech_addressbus/init.lua: CCache(" .. v[1].x+v[3].x .. "," .. v[1].y+v[3].y .. "," .. v[1].z+v[3].z .. ")")
 						addressbus.send(v[1], msg, v[3])
+						--else
+						--print("computech_addressbus/init.lua: CCacheF(" .. v[1].x+v[3].x .. "," .. v[1].y+v[3].y .. "," .. v[1].z+v[3].z .. ")")
 					end
 				end
 			end
