@@ -168,7 +168,6 @@ dio_handlers[12] = function (pos, data)
 		local lc = math.floor(bit32.band(data, 0xFF000000) / 0x1000000)
 		local ld = math.floor(bit32.band(data, 0xFF0000) / 0x10000)
 		local cmd = math.floor(bit32.band(data, 0xFF00) / 0x100)
-		print("DIO Received command " .. string.format("%08x", data))
 		if cmd == 1 then
 			-- Write
 			local buffer_count = meta:get_int("s_count") + 1
@@ -249,7 +248,7 @@ local function dio_handler(pos, msg, dir)
 	end
 end
 minetest.register_node("computech_addressbus:digiline_io", {
-	description = "Computech Digiline IO Chip <MOSTLY TESTED>",
+	description = "Computech Digiline IO Chip",
 	tiles = {"computech_addressbus_dio_top.png", "computech_addressbus_dio_top.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png",
 		"computech_addressbus_port.png", "computech_addressbus_port.png"},

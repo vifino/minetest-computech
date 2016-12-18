@@ -1,5 +1,9 @@
 local zpu_rate = 0.125
 local zpu_clock = 100 -- Note! This is divided by the total amount of operating ZPUs.
+if bit then
+ -- LuaJIT likely - increase clockspeed
+ zpu_clock = 200
+end
 local mp = minetest.get_modpath("computech_machine_zpu")
 local bit32, addressbus, bettertimers = computech.bit32, computech.addressbus, computech.bettertimers
 
