@@ -91,7 +91,7 @@ local function seth(zpu_emu, a, v)
 end
 
 local function eqbranch(zpu_emu, bcf)
-	local br = zpu_emu.rIP + zpu_emu:v_pop()
+	local br = a32(zpu_emu.rIP + zpu_emu:v_pop())
 	if bcf(zpu_emu:v_pop()) then
 		zpu_emu.rIP = br
 	else

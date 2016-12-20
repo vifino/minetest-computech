@@ -17,31 +17,55 @@ local function register_ram(kb)
 			return 0xFF
 		end
 		local cin = ci(pos)
+		-- note the order - read_ram is poked to ensure cache exists by flush
 		if not cache[cin] then
 			cache[cin] = minetest.get_meta(pos):get_string("m")
 			if not cache[cin] then
 				cache[cin] = string.rep(string.char(0), bytes)
 			end
 		end
+		if wcache[cin] then
+			local r = wcache[cin][addr]
+			if r then return r:byte() end
+		end
 		return cache[cin]:byte(addr + 1)
 	end
 	local function write_ram(pos, addr, value)
+		local cin = ci(pos)
 		if addr >= bytes then
 			return
 		end
-		local cin = ci(pos)
-		-- this call also initializes cache
-		if read_ram(pos, addr) == value then
-			return
-		end
-		local d = cache[cin]
-		local s, e = d:sub(1, addr), d:sub(addr + 2)
-		cache[cin] = table.concat({s, string.char(value), e})
-		wcache[cin] = true
+		if not wcache[cin] then wcache[cin] = {} end
+		wcache[cin][addr] = string.char(value)
 	end
 	local function flush_ram(pos)
 		local cin = ci(pos)
-		if cache[cin] and wcache[cin] then
+		if wcache[cin] then
+			read_ram(pos, 0) -- poke to ensure cache exists
+			local wc = wcache[cin]
+			local cc = cache[cin]
+			local fc = {}
+			local lastcachepoint = nil
+			for i = 0, bytes - 1 do
+				if wc[i] then
+					if lastcachepoint then
+						-- i is actually (i + 1) - 1
+						-- (convert to string coordinates,
+						--  -1 because we don't want to include current char)
+						table.insert(fc, cache[cin]:sub(lastcachepoint + 1, i))
+						lastcachepoint = nil
+					end
+					table.insert(fc, wc[i])
+				else
+					if not lastcachepoint then
+						lastcachepoint = i
+					end
+				end
+			end
+			if lastcachepoint then
+				table.insert(fc, cache[cin]:sub(lastcachepoint + 1))
+			end
+			cache[cin] = table.concat(fc)
 			minetest.get_meta(pos):set_string("m", cache[cin])
 			-- cache continues to exist.
 			wcache[cin] = nil
@@ -182,19 +206,25 @@ minetest.register_node("computech_addressbus:inspector", {
 			local flashitem = fields["flash"]
 			local rom = addressbus.roms[flashitem]
 			if rom then
-				local romulen = math.ceil(rom:len() / 4)
+				-- Note that the ROM should never exceed 0x7FFFFFFF bytes or so,
+				-- and thus there isn't half the safety checks on this that I'd usually use
+				local romulen = math.ceil(rom:len() / 256)
 				local r = 0
 				for i = 0, romulen - 1 do
 					local lj = i
-					minetest.after(lj * 0.001, function ()
-						local addr = lj * 4
-						local a, b, c, d = rom:byte(addr + 1), rom:byte(addr + 2), rom:byte(addr + 3), rom:byte(addr + 4)
-						a = a or 0
-						b = b or 0
-						c = c or 0
-						d = d or 0
-						local v = d + (c * 0x100) + (b * 0x10000) + (a * 0x1000000)
-						addressbus.send_all(pos, addressbus.wrap_message("write32", {addr, v}, function() end))
+					minetest.after(lj * (2 / 256), function ()
+						local addr = lj * 256
+						-- 64 * 4 = 256
+						for s = 0, 63 do
+							local a, b, c, d = rom:byte(addr + 1), rom:byte(addr + 2), rom:byte(addr + 3), rom:byte(addr + 4)
+							a = a or 0
+							b = b or 0
+							c = c or 0
+							d = d or 0
+							local v = d + (c * 0x100) + (b * 0x10000) + (a * 0x1000000)
+							addressbus.send_all(pos, addressbus.wrap_message("write32", {addr, v}, function() end))
+							addr = addr + 4
+						end
 						r = r + 1
 						if r == romulen then
 							addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))

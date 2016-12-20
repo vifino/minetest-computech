@@ -1,11 +1,16 @@
 local zpu_rate = 0.125
-local zpu_clock = 100 -- Note! This is divided by the total amount of operating ZPUs.
-if bit then
+local zpu_clock = 200 -- Note! This is divided by the total amount of operating ZPUs.
+if jit then
  -- LuaJIT likely - increase clockspeed
- zpu_clock = 200
+ zpu_clock = 425
 end
 local mp = minetest.get_modpath("computech_machine_zpu")
+
+local profiler = nil -- {<output file>, <symbol table>}
+
 local bit32, addressbus, bettertimers = computech.bit32, computech.addressbus, computech.bettertimers
+
+local profiler_data = nil
 
 -- REB ROM
 local function getROM(file)
@@ -70,9 +75,13 @@ local function zputick(pos, operating)
 			meta:set_int("il", 0)
 		end
 	end
+	if profiler then
+		profiler_data = profiler_data or {}
+	end
 	local frozen = false
 	local left = math.ceil(zpu_clock / operating)
 	while left > 0 and (not frozen) do
+		if profiler_data then profiler_data[globalZPU.rIP] = (profiler_data[globalZPU.rIP] or 0) + 1 end
 		local disasm, ipb = globalZPU:run()
 		if not disasm then
 			if ipb == 0 then
@@ -104,6 +113,40 @@ local function start_zpu(pos)
 	minetest.set_node(pos, {name = "computech_machine_zpu:zpu"})
 end
 local function stop_zpu(pos)
+	if profiler_data then
+		local mapping = {}
+		local categories = {}
+		local syms = io.open(profiler[2], "r")
+		local s = syms:read()
+		while s do
+			local start = tonumber("0x" .. s:sub(1, 8))
+			if start then
+				s = s:sub(18)
+				local st = s:find("\t")
+				s = s:sub(st + 1)
+				local size = tonumber("0x" .. s:sub(1, 8))
+				local name = s:sub(10)
+				for a = 0, size - 1 do
+					mapping[start + a] = name
+				end
+			end
+			s = syms:read()
+		end
+		syms:close()
+		for k, v in pairs(profiler_data) do
+			if mapping[k] then
+				categories[mapping[k]] = (categories[mapping[k]] or 0) + v
+			end
+		end
+		table.sort(categories) -- I have no idea how this works.
+		local file = io.open(profiler[1], "w")
+		for k, v in pairs(categories) do
+			file:write(k .. " : " .. v .. "\n")
+		end
+		file:close()
+		profiler_data = nil
+		print("Profiler data was written. Have a happy Winter!")
+	end
 	minetest.set_node(pos, {name = "computech_machine_zpu:zpu_off"})
 end
 
