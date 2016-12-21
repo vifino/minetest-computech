@@ -11,7 +11,7 @@ computech.addressbus.roms = {}
 
 -- Figure out a better way to configure this?
 -- Note this doesn't count cables.
-local depthlimit = 6
+local depthlimit = 10
 
 -- Global variable used to work out things.
 local currentdepth = 0

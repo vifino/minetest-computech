@@ -185,7 +185,7 @@ dio_handlers[12] = function (pos, data)
 			if not nt:is_started() then
 				nt:start(1.0)
 			end
-			minetest.after(0.05, function ()
+			minetest.after(0.05, function()
 				dio_send_buffers(pos)
 			end)
 		end

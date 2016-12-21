@@ -2,7 +2,7 @@ local zpu_rate = 0.125
 local zpu_clock = 300 -- Note! This is divided by the total amount of operating ZPUs.
 if jit then
  -- LuaJIT likely - increase clockspeed
- zpu_clock = 900
+ zpu_clock = 650
 end
 local mp = minetest.get_modpath("computech_machine_zpu")
 
@@ -114,6 +114,7 @@ local function zputick(pos, operating)
 				minetest.set_node(pos, {name = "computech_machine_zpu:zpu_err"})
 				meta:set_string("infotext", string.format("Bad op %02x at IP: %08x", ipb, globalZPU.rIP))
 				addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
+				zpu_caching = nil
 				return
 			end
 		end
