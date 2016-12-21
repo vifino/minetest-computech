@@ -1,8 +1,8 @@
 local zpu_rate = 0.125
-local zpu_clock = 180 -- Note! This is divided by the total amount of operating ZPUs.
+local zpu_clock = 300 -- Note! This is divided by the total amount of operating ZPUs.
 if jit then
  -- LuaJIT likely - increase clockspeed
- zpu_clock = 425
+ zpu_clock = 900
 end
 local mp = minetest.get_modpath("computech_machine_zpu")
 
@@ -42,23 +42,41 @@ local function reset_zpu(pos)
 	timer:start(1.0)
 end
 
+-- Per-ZPU-tick-cache
+local zpu_caching = nil
+
 local function zpu_get32(zpu_inst, addr)
 	if bit32.band(addr, 3) ~= 0 then return 0xFFFFFFFF end
+	if zpu_caching[addr] then
+		return zpu_caching[addr]
+	end
 	local data = 0xFFFFFFFF
 	addressbus.send_all(zpu_inst.pos, addressbus.wrap_message("read32", {addr}, function(nd)
 		data = bit32.band(data, nd)
 	end))
+	if addr < 0x80000000 then
+		zpu_caching[addr] = data
+	end
 	return data
 end
 
 local function zpu_set32(zpu_inst, addr, data)
-	if bit32.band(addr, 3) ~= 0 then return 0xFFFFFFFF end
+	if bit32.band(addr, 3) ~= 0 then return end
+	if addr == 0xFFFFFFFC then
+		zpu_caching = {}
+	end
+	if addr < 0x80000000 then
+		-- Don't trust the memory space to be sane
+		-- (somehow, it isn't even in a config which *should* arguably be sane)
+		zpu_caching[addr] = nil
+	end
 	addressbus.send_all(zpu_inst.pos, addressbus.wrap_message("write32", {addr, data}, function() end))
 end
 
 local globalZPU = zpu.new(zpu_get32, zpu_set32)
 
 local function zputick(pos, operating)
+	zpu_caching = {}
 	local meta = minetest.get_meta(pos)
 	globalZPU.rIP = bit32.band(meta:get_int("ip"), 0xFFFFFFFF)
 	globalZPU.rSP = bit32.band(meta:get_int("sp"), 0xFFFFFFFF)
@@ -107,6 +125,7 @@ local function zputick(pos, operating)
 	meta:set_int("sp", globalZPU.rSP)
 	meta:set_int("im", imr)
 	addressbus.send_all(pos, addressbus.wrap_message("flush", {}, function() end))
+	zpu_caching = nil
 end
 
 local function start_zpu(pos)
@@ -178,6 +197,9 @@ minetest.register_node("computech_machine_zpu:zpu", {
 	computech_addressbus = {
 		interrupt = function (pos, msg, dir)
 			abus_interrupt(pos, false)
+		end,
+		flush = function (pos, msg, dir)
+			zpu_caching = {}
 		end
 	}
 })

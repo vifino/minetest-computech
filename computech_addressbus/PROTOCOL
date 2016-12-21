@@ -1,4 +1,23 @@
 Addressbus, at it's core, is a simple message network.
+Keep in mind, when using addressbus,
+ that caching is used whenever possible to avoid contacting nodes.
+Caching is used at several levels:
+ 1. CPUs which require any level of performance will need to have
+     a read-cache on address space under 0x80000000.
+    Writes go through unimpeded
+    (clearing that entry in the read cache, as it could come back different).
+    This will be flushed by the end of that CPU's processing for that tick,
+     or if explicit flush instructions are given.
+ 2. Addressbus keeps an internal cable cache, recording all of the cables,
+     and devices connected to them.
+    Even with the cable group, something is only considered a device if
+     it has the computech_addressbus table.
+    This is vitally important for nodes which change state -
+     to be considered a device in any given state,
+     it should have that table (empty or otherwise) in all of them.
+ 3. RAMs have their own caches. These are more or less transparent,
+     but unless proper flushing semantics (flush before the tick ends at the latest)
+      are followed, a save/reload of the game will result in stale data.
 Messages are:
  "read32": params[1]: address (Should be aligned)
            respond(w32): Return the 32-bit word at that address.
@@ -21,6 +40,11 @@ Messages are:
               If the user wants to actually use interrupts,
                an interrupt helper should be in place
                to allow proper queue semantics. (Of course, for a custom-built OS and system, anything can be used.)
+              CPUs that receive this must flush any internal caches.
+ "flush": Flush any memory caches in use.
+          This message should spread everywhere, including to CPUs.
+          CPUs that receive this must flush any internal caches.
+
 NOTE: There are some messages, beginning with internal_cable,
        which bypass the cable cache.
       These are solely used in the maintenance of the cable cache.

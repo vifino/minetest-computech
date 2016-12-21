@@ -16,6 +16,11 @@ local function dma_ww(pos, address, word)
 	local newmsg = addressbus.wrap_message("write32", {address, word}, function () end)
 	addressbus.send_all(pos, newmsg)
 end
+local function dma_fl(pos)
+	local newmsg = addressbus.wrap_message("flush", {}, function () end)
+	addressbus.send_all(pos, newmsg)
+end
+
 local function dma_rb(pos, address)
 	local target = bit32.band(address, 0xFFFFFFFC)
 	local remain = address - target
@@ -205,6 +210,7 @@ dio_handlers[12] = function (pos, data)
 			dma_write(pos, ac, c)
 			dma_write(pos, ad, d)
 			dio_wm(meta, buffer_count)
+			dma_fl(pos)
 		end
 		meta:set_int("wr", data)
 	else

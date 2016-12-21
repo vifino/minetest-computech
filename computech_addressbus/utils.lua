@@ -404,17 +404,12 @@ minetest.register_node("computech_addressbus:mcu", {
 			end
 		end,
 		flush = function (pos, msg, dir)
-			if find_direction(pos, dir) == 3 then
-				-- Flush should be propagated from CPUs outwards to all.
-				local _, flushA = find_direction(pos, 1)
-				local _, flushB = find_direction(pos, 2)
-				addressbus.send_all(pos, msg, flushA)
-				addressbus.send_all(pos, msg, flushB)
-				-- This flushes ALL caches, it's intentional:
-				-- since any cache that doesn't disappear
-				-- by the end of that CPU's tick is stale.
-				flush_caches()
-			end
+			-- Send it everywhere.
+			addressbus.send_all(pos, msg)
+			-- This flushes ALL caches, it's intentional:
+			-- since any cache that doesn't disappear
+			-- by the end of that CPU's tick is stale.
+			flush_caches()
 		end,
 		interrupt = function (pos, msg, dir)
 			-- If interrupt is CPU-side, ignore.
