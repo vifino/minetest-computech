@@ -1,5 +1,5 @@
 local zpu_rate = 0.125
-local zpu_clock = 200 -- Note! This is divided by the total amount of operating ZPUs.
+local zpu_clock = 180 -- Note! This is divided by the total amount of operating ZPUs.
 if jit then
  -- LuaJIT likely - increase clockspeed
  zpu_clock = 425

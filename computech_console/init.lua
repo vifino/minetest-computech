@@ -1,7 +1,49 @@
 -- A Digilines console!
 
-local console_lines = 6
+local console_lines = 8
+
+-- Estimated.
+local console_width = 400
+
+-- lines -> node names
 local console_mapping = {}
+
+local function console_cpx(l, lwu)
+	if l == " " then if lwu then return 6 else return 3 end end
+	if l == "a" then return 9 end
+	if l == "f" then return 5 end
+	if l == "i" then return 3 end
+	if l == "l" then return 3 end
+	if l == "m" then return 13 end
+	if l == "t" then return 5 end
+	if l == ":" then return 5 end
+	if l == ";" then return 5 end
+	if l == "(" then return 5 end
+	if l == ")" then return 5 end
+	if l == "{" then return 5 end
+	if l == "}" then return 5 end
+	if l == "[" then return 5 end
+	if l == "]" then return 5 end
+	if l == "\\" then return 5 end
+	if l == "/" then return 5 end
+	if l == "'" then return 3 end
+	if l == "`" then return 5 end
+	if l == l:upper() then return 10, true end
+	return 8
+end
+local function console_lpx(line)
+	local px = 0
+	local upper = false
+	for i = 1, line:len() do
+		if line:byte(i) < 128 then
+			-- avoid chars > 127 so they can't get cut
+			local sz, lu = console_cpx(line:sub(i, i), upper)
+			upper = lu
+			px = px + sz
+		end
+	end
+	return px
+end
 local function console_gui(pos, first)
 	local meta = minetest.get_meta(pos)
 	local formspec = "size[8," .. ((console_lines / 2) + 1) .. "]"
@@ -49,8 +91,17 @@ local function console_append(pos, str)
 		else
 			local substr = str:gmatch("[^\n]+")()
 			if not substr then return end
-			meta:set_string("c" .. console_lines, meta:get_string("c" .. console_lines) .. substr)
+			local res = meta:get_string("c" .. console_lines) .. substr
 			str = str:sub(substr:len() + 1)
+			local ext = ""
+			while console_lpx(res) > console_width do
+				ext = res:sub(res:len()) .. ext
+				res = res:sub(1, res:len() - 1)
+			end
+			meta:set_string("c" .. console_lines, res)
+			if ext ~= "" then
+				str = "\n" .. ext .. str
+			end
 		end
 	end
 end
