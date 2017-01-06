@@ -62,13 +62,15 @@ end
 
 local function zpu_set32(zpu_inst, addr, data)
 	if bit32.band(addr, 3) ~= 0 then return end
+	-- I'm just leaving this in despite the inefficiency,
+	--  it'll help 
+	if bit32.band(data, 0xFFFFFFFF) ~= data then error("set32 internal failure.") end
 	if addr == 0xFFFFFFFC then
 		zpu_caching = {}
 	end
 	if addr < 0x80000000 then
-		-- Don't trust the memory space to be sane
-		-- (somehow, it isn't even in a config which *should* arguably be sane)
-		zpu_caching[addr] = nil
+		-- This now works properly!
+		zpu_caching[addr] = data
 	end
 	addressbus.send_all(zpu_inst.pos, addressbus.wrap_message("write32", {addr, data}, function() end))
 end
