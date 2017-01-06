@@ -1,6 +1,10 @@
 -- A Digilines console!
 
+-- Amount of lines in the console.
 local console_lines = 8
+
+-- Line height in slots.
+local console_lh = 0.35
 
 -- Estimated.
 local console_width = 400
@@ -46,7 +50,7 @@ local function console_lpx(line)
 end
 local function console_gui(pos, first)
 	local meta = minetest.get_meta(pos)
-	local formspec = "size[8," .. ((console_lines / 2) + 1) .. "]"
+	local formspec = "size[8," .. ((console_lines * console_lh) + 1) .. "]"
 	local console = {}
 	local firstline = console_lines + 1
 	for l = 1, console_lines do
@@ -68,10 +72,10 @@ local function console_gui(pos, first)
 				print("computech_console: edge case!")
 			end
 		end
-		formspec = formspec .. "label[0, " .. ((l - 1) / 2) .. ";" .. minetest.formspec_escape(console[l]) ..  "]"
+		formspec = formspec .. "label[0, " .. ((l - 1) * console_lh) .. ";" .. minetest.formspec_escape(console[l]) ..  "]"
 		meta:set_string("c" .. l, console[l])
 	end
-	local hd = ((console_lines / 2) + 0.5)
+	local hd = ((console_lines * console_lh) + 0.5)
 	formspec = formspec .. "button[6," .. hd .. ";2,1;submit;Send]"
 	                    .. "field[1," .. hd .. ";5,1;stext;;]"
 	meta:set_string("formspec", formspec)
