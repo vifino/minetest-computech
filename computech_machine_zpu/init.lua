@@ -91,7 +91,9 @@ local function zputick(pos, operating)
 			--  which means if the timeslice continues without the interrupt occurring,
 			--  then it may well return to sleep before we have a chance.
 			-- So do this now.
-			globalZPU:op_emulate(1)
+			globalZPU.rSP = bit32.band(globalZPU.rSP - 4, 0xFFFFFFFF)
+			globalZPU:set32(globalZPU.rSP, globalZPU.rIP)
+			globalZPU.rIP = 32
 			meta:set_int("il", 0)
 		end
 	end
